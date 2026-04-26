@@ -1,0 +1,706 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme tokens ────────────────────────────────────────────────────────── */
+
+.dark {
+  --th-bg: #0e0e0e;
+  --th-surface: #131313;
+  --th-surface-hover: #1f2020;
+  --th-surface-raised: #252626;
+  --th-surface-overlay: rgba(44,44,44,0.85);
+  --th-sidebar: rgba(19,19,19,0.85);
+  --th-sidebar-collapsed: rgba(30,30,30,0.85);
+  --th-border: #484848;
+  --th-border-subtle: rgba(255,255,255,0.06);
+  --th-border-10: rgba(72,72,72,0.1);
+  --th-border-15: rgba(72,72,72,0.15);
+  --th-border-20: rgba(72,72,72,0.2);
+  --th-border-25: rgba(72,72,72,0.25);
+  --th-border-30: rgba(72,72,72,0.3);
+  --th-divider: #2e2e2e;
+  --th-text: #e7e5e4;
+  --th-text-strong: #f5f5f4;
+  --th-text-secondary: #c6c6c6;
+  --th-text-muted: #acabaa;
+  --th-text-faint: rgba(172,171,170,0.4);
+  --th-text-hint: rgba(172,171,170,0.2);
+  --th-accent: #c6c6c6;
+  --th-accent-on: #1a1a1a;
+  --th-accent-dim: rgba(198,198,198,0.8);
+  --th-accent-faint: rgba(198,198,198,0.6);
+  --th-accent-subtle: rgba(198,198,198,0.4);
+  --th-input-bg: #0e0e0e;
+  --th-code-bg: #1a1a1a;
+  --th-canvas-bg: #0e0e0e;
+  --th-canvas-dot: #2c2c2c;
+
+  --th-chart-bg: #1a1a2e;
+  --th-chart-border: rgba(108,99,255,0.2);
+  --th-table-divider: #ffffff;
+  --th-shadow: rgba(0,0,0,0.4);
+  --th-shadow-heavy: rgba(0,0,0,0.5);
+  --th-stroke: rgba(198,198,198,0.8);
+  --th-stroke-strong: rgba(198,198,198,0.9);
+  --th-stroke-dim: rgba(198,198,198,0.7);
+  --th-stroke-faint: rgba(198,198,198,0.6);
+  --th-selection-border: rgba(231,229,228,0.85);
+  --th-selection-bg: rgba(198,198,198,0.1);
+}
+
+.light {
+  --th-bg: #f5f5f4;
+  --th-surface: #ffffff;
+  --th-surface-hover: #ededec;
+  --th-surface-raised: #ffffff;
+  --th-surface-overlay: rgba(255,255,255,0.88);
+  --th-sidebar: rgba(245,245,244,0.88);
+  --th-sidebar-collapsed: rgba(235,235,234,0.88);
+  --th-border: #d4d4d4;
+  --th-border-subtle: rgba(0,0,0,0.06);
+  --th-border-10: rgba(0,0,0,0.06);
+  --th-border-15: rgba(0,0,0,0.08);
+  --th-border-20: rgba(0,0,0,0.1);
+  --th-border-25: rgba(0,0,0,0.12);
+  --th-border-30: rgba(0,0,0,0.15);
+  --th-divider: #e5e5e5;
+  --th-text: #1c1c1c;
+  --th-text-strong: #0e0e0e;
+  --th-text-secondary: #555555;
+  --th-text-muted: #888888;
+  --th-text-faint: rgba(0,0,0,0.25);
+  --th-text-hint: rgba(0,0,0,0.15);
+  --th-accent: #1a1a1a;
+  --th-accent-on: #ffffff;
+  --th-accent-dim: rgba(30,30,30,0.8);
+  --th-accent-faint: rgba(30,30,30,0.6);
+  --th-accent-subtle: rgba(30,30,30,0.4);
+  --th-input-bg: #f5f5f4;
+  --th-code-bg: #f0f0f0;
+  --th-canvas-bg: #e8e6e3;
+  --th-canvas-dot: #c8c5c1;
+
+  --th-chart-bg: #eef0ff;
+  --th-chart-border: rgba(108,99,255,0.15);
+  --th-table-divider: #000000;
+  --th-shadow: rgba(0,0,0,0.08);
+  --th-shadow-heavy: rgba(0,0,0,0.12);
+  --th-stroke: rgba(60,60,60,0.8);
+  --th-stroke-strong: rgba(60,60,60,0.9);
+  --th-stroke-dim: rgba(60,60,60,0.7);
+  --th-stroke-faint: rgba(60,60,60,0.6);
+  --th-selection-border: rgba(30,30,30,0.85);
+  --th-selection-bg: rgba(30,30,30,0.1);
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--th-bg);
+  color: var(--th-text);
+  font-family: var(--font-lexend), sans-serif;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  direction: ltr;
+}
+
+#sidebar {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.monastic-card {
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.monastic-card:hover {
+  border-color: var(--th-border-30);
+  background-color: var(--th-surface-hover);
+}
+
+@keyframes draw-hint-pulse {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 1; }
+}
+
+.animate-draw-hint {
+  animation: draw-hint-pulse 2s ease-in-out infinite;
+}
+
+@keyframes chart-loading-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+.chart-loading {
+  animation: chart-loading-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+@keyframes canvas-el-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.canvas-el-fade-in {
+  animation: canvas-el-fade-in 120ms ease-out both;
+}
+
+@keyframes table-skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.8; }
+}
+
+@keyframes table-cell-skeleton-blink {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+
+.table-cell-skeleton-bar {
+  width: 45%;
+  max-width: 60px;
+  height: 14px;
+  border-radius: 3px;
+  margin: 8px 0 0 4px;
+  background: var(--th-text);
+  animation: table-cell-skeleton-blink 1s ease-in-out infinite;
+}
+
+@keyframes thinking_1 {
+  0%, 60%, 100% { opacity: 0.4; transform: scale(0.8); }
+  30% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-caret-blink {
+  animation: caret-blink 1.05s step-end infinite;
+}
+
+.chat-scroll-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Chat markdown styles ─────────────────────────────────────────────────── */
+
+.chat-markdown {
+  word-break: break-word;
+}
+
+.chat-markdown p {
+  margin: 0;
+}
+
+.chat-markdown p + p {
+  margin-top: 0.5em;
+}
+
+.chat-markdown strong {
+  font-weight: 700;
+  color: var(--th-text-strong);
+}
+
+.chat-markdown em {
+  font-style: italic;
+}
+
+.chat-markdown code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: var(--th-code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+.chat-markdown pre {
+  background: var(--th-code-bg);
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+  margin: 0.4em 0;
+  overflow-x: auto;
+}
+
+.chat-markdown pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85em;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+
+.chat-markdown li {
+  margin: 0.15em 0;
+}
+
+.chat-markdown li::marker {
+  color: var(--th-text-faint);
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  font-weight: 700;
+  color: var(--th-text-strong);
+  margin: 0.4em 0 0.2em;
+}
+
+.chat-markdown h1 { font-size: 1.3em; }
+.chat-markdown h2 { font-size: 1.15em; }
+.chat-markdown h3 { font-size: 1.05em; }
+
+.chat-markdown blockquote {
+  border-left: 3px solid var(--th-border);
+  padding-left: 0.8em;
+  margin: 0.3em 0;
+  color: var(--th-text-muted);
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--th-divider);
+  padding: 0.25em 0.6em;
+}
+
+.chat-markdown th {
+  background: var(--th-code-bg);
+  font-weight: 600;
+}
+
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid var(--th-divider);
+  margin: 0.5em 0;
+}
+
+.chat-markdown a {
+  color: #6c63ff;
+  text-decoration: underline;
+}
+
+.chat-markdown mark {
+  background-color: rgba(255, 213, 79, 0.4);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* ── Text element markdown (display mode) ── */
+/* ── Text element markdown (display mode) ──
+   Each line is its own fixed-height div. All vertical margins/padding
+   must be zero so content stays within the line box & selection rect. */
+.text-markdown {
+  word-break: break-word;
+}
+
+.text-markdown p {
+  margin: 0;
+}
+
+.text-markdown p + p {
+  margin: 0;
+}
+
+.text-markdown strong {
+  font-weight: 700;
+  color: var(--th-text-strong);
+}
+
+.text-markdown em {
+  font-style: italic;
+}
+
+.text-markdown code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: var(--th-code-bg);
+  padding: 0 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+.text-markdown pre {
+  background: var(--th-code-bg);
+  border-radius: 6px;
+  padding: 0 0.8em;
+  margin: 0;
+  overflow-x: auto;
+}
+
+.text-markdown pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85em;
+}
+
+.text-markdown ul,
+.text-markdown ol {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.text-markdown li {
+  margin: 0;
+}
+
+.text-markdown li::marker {
+  color: var(--th-text-faint);
+}
+
+.text-markdown h1,
+.text-markdown h2,
+.text-markdown h3,
+.text-markdown h4,
+.text-markdown h5,
+.text-markdown h6 {
+  font-weight: 700;
+  color: var(--th-text-strong);
+  margin: 0;
+  line-height: inherit;
+}
+
+/* Must match HEADING_EM in canvas-utils.tsx */
+.text-markdown h1 { font-size: 1.4em; }
+.text-markdown h2 { font-size: 1.2em; }
+.text-markdown h3 { font-size: 1.05em; }
+.text-markdown h4 { font-size: 0.92em; }
+.text-markdown h5 { font-size: 0.84em; }
+.text-markdown h6 { font-size: 0.76em; }
+
+.text-markdown blockquote {
+  border-left: 3px solid var(--th-border);
+  padding-left: 0.8em;
+  margin: 0;
+  color: var(--th-text-muted);
+}
+
+.text-markdown table {
+  border-collapse: collapse;
+  margin: 0;
+}
+
+.text-markdown th,
+.text-markdown td {
+  border: 1px solid var(--th-divider);
+  padding: 0 0.6em;
+}
+
+.text-markdown th {
+  background: var(--th-code-bg);
+  font-weight: 600;
+}
+
+.text-markdown hr {
+  border: none;
+  border-top: 1px solid var(--th-divider);
+  margin: 0;
+}
+
+.text-markdown a {
+  color: #6c63ff;
+  text-decoration: underline;
+}
+
+.text-markdown mark {
+  background-color: rgba(255, 213, 79, 0.4);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* ── Rich-text display (Tiptap read-only) ────────────────────────────────── */
+/* Mirror the .text-markdown zero-margin rules so spacing matches the canvas grid. */
+
+/* The EditorContent wrapper div must not collapse */
+.tiptap-display-wrap {
+  width: max-content;
+  min-width: 8px;
+}
+
+.rich-text-display.ProseMirror {
+  margin: 0;
+  padding: 0;
+  outline: none;
+  word-break: break-word;
+  width: max-content;
+  min-width: 8px;
+}
+
+.rich-text-display p {
+  margin: 0;
+  min-height: 1em;
+}
+
+.rich-text-display p:empty {
+  display: none;
+}
+
+.rich-text-display p + p {
+  margin: 0;
+}
+
+.rich-text-display strong {
+  font-weight: 700;
+  color: var(--th-text-strong);
+}
+
+.rich-text-display em {
+  font-style: italic;
+}
+
+.rich-text-display code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: var(--th-code-bg);
+  padding: 0 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+.rich-text-display pre {
+  background: var(--th-code-bg);
+  border-radius: 6px;
+  padding: 0 0.8em;
+  margin: 0;
+  overflow-x: auto;
+}
+
+.rich-text-display pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85em;
+}
+
+.rich-text-display ul,
+.rich-text-display ol {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.rich-text-display ul {
+  list-style-type: disc;
+}
+
+.rich-text-display ol {
+  list-style-type: decimal;
+}
+
+.rich-text-display li {
+  margin: 0;
+}
+
+.rich-text-display li::marker {
+  color: var(--th-text-faint);
+}
+
+.rich-text-display h1,
+.rich-text-display h2,
+.rich-text-display h3,
+.rich-text-display h4,
+.rich-text-display h5,
+.rich-text-display h6 {
+  font-weight: 700;
+  color: var(--th-text-strong);
+  margin: 0;
+  line-height: inherit;
+}
+
+.rich-text-display h1 { font-size: 1.4em; }
+.rich-text-display h2 { font-size: 1.2em; }
+.rich-text-display h3 { font-size: 1.05em; }
+.rich-text-display h4 { font-size: 0.92em; }
+.rich-text-display h5 { font-size: 0.84em; }
+.rich-text-display h6 { font-size: 0.76em; }
+
+.rich-text-display blockquote {
+  border-left: 3px solid var(--th-border);
+  padding-left: 0.8em;
+  margin: 0;
+  color: var(--th-text-muted);
+}
+
+.rich-text-display hr {
+  border: none;
+  border-top: 1px solid var(--th-divider);
+  margin: 0;
+}
+
+.rich-text-display img {
+  max-width: 800px;
+  height: auto;
+  object-fit: contain;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Once a column has a user-pinned width, its cells fill the cell box so
+   text wraps to the cell width. Unpinned cells keep the default
+   `width: max-content` so a fresh column still auto-sizes to its content. */
+[data-table-cell][data-wrap="1"] .tiptap-display-wrap,
+[data-table-cell][data-wrap="1"] .rich-text-display.ProseMirror {
+  width: 100%;
+  max-width: 100%;
+}
+.rich-text-display img.ProseMirror-selectednode {
+  outline: 2px solid var(--th-accent, #60a5fa);
+  outline-offset: 2px;
+}
+
+.text-marquee-selected .rich-text-display {
+  background: transparent;
+}
+.text-marquee-selected .rich-text-display * {
+  background: Highlight;
+  background: var(--th-selection-bg, rgba(0, 100, 255, 0.3));
+  color: HighlightText;
+  color: var(--th-selection-text, inherit);
+  border-radius: 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* ── Line prefix decorations (lists, checklists, blockquotes) ────────────── */
+
+.line-prefix {
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.line-prefix-check {
+  width: 1.5em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.line-prefix-check .check-box {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border: 1.5px solid var(--th-text-faint);
+  border-radius: 3px;
+  position: relative;
+}
+
+.line-prefix-check .check-box.checked {
+  background: #6c63ff;
+  border-color: #6c63ff;
+}
+
+.line-prefix-check .check-box.checked .check-mark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.line-prefix-check .check-box.checked .check-mark::after {
+  content: "";
+  display: block;
+  width: 0.3em;
+  height: 0.5em;
+  border-right: 1.5px solid #fff;
+  border-bottom: 1.5px solid #fff;
+  transform: rotate(45deg) translateY(-0.04em);
+}
+
+.line-prefix-bullet {
+  width: 1.4em;
+  color: var(--th-text-faint);
+  text-align: center;
+}
+
+.line-prefix-number {
+  min-width: 1.4em;
+  color: var(--th-text-faint);
+  text-align: right;
+  padding-right: 0.4em;
+}
+
+.line-prefix-quote {
+  width: 0.8em;
+  border-left: 3px solid var(--th-border);
+  margin-right: 0.5em;
+  flex-shrink: 0;
+}
+
+.katex-display { margin: 0; }
+
+/* ── PDF text-selection layer ────────────────────────────────────────────── */
+/* Subset of pdfjs-dist/web/pdf_viewer.css scoped to .textLayer — overlays
+ * transparent, positioned text spans on top of the rendered page canvas so the
+ * browser can do native selection / copy. The textLayer container must have
+ * --total-scale-factor set (we set it from the page's render scale). */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  z-index: 1;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent { display: contents; }
