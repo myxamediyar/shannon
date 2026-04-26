@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const port = process.env.PORT || process.env.SHANNON_PORT || '1948';
+const host = process.env.HOST || process.env.SHANNON_HOST || '127.0.0.1';
 const url = `http://localhost:${port}`;
 const projectDir = path.resolve(__dirname, '..');
 
@@ -24,7 +25,7 @@ setTimeout(() => {
   }
 }, 2000);
 
-const child = spawn(process.execPath, [nextBin, 'start', '-p', String(port)], {
+const child = spawn(process.execPath, [nextBin, 'start', '-H', host, '-p', String(port)], {
   cwd: projectDir,
   stdio: 'inherit',
   env: process.env,

@@ -1,6 +1,6 @@
 {
   "name": "tryshannon",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first, BYOK AI whiteboard. Infinite canvas for notes, chat, drawings, math, graphs, charts, tables, PDFs, and embeds.",
   "license": "Apache-2.0",
   "author": "myxamediyar",
@@ -37,9 +37,9 @@
     "NOTICE"
   ],
   "scripts": {
-    "dev": "next dev -p 1948",
+    "dev": "next dev -H 127.0.0.1 -p 1948",
     "build": "next build",
-    "start": "next start -p 1948",
+    "start": "next start -H 127.0.0.1 -p 1948",
     "lint": "next lint",
     "prepublishOnly": "npm run build"
   },
