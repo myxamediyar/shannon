@@ -38,10 +38,10 @@
   ],
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start -H 127.0.0.1 -p 1948",
     "lint": "next lint",
-    "prepublishOnly": "npm run build"
+    "prepack": "rm -rf .next && npm run build && rm -rf .next/cache"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

@@ -282,11 +282,6 @@ export default function HomePage() {
         x: COL_A + 1500, y: 2310,
         latex: "H(X) = -\\sum_i p(x_i)\\,\\log_2 p(x_i)",
       },
-
-      // ── Embed callout (below logo, full-width row) ───
-      text(COL_A, 2840, "Embed live videos & docs", 1.25),
-      text(COL_A, 2880, "/embed <url> — works with youtube.com, youtu.be, and docs.google.com links.", 1.05),
-      text(COL_A, 2902, "Drop or /image / /pdf for files; /embed for hosted content.", 1.05),
     ];
 
       setNote({
