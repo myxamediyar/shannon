@@ -11,8 +11,8 @@ import {
   CHAT_MAX_VISIBLE_LINES,
 } from "../lib/canvas-types";
 import {
+  chatElContentHeight,
   chatElContentWidth,
-  chatElViewportHeight,
   chatLineHeight,
   snapTextLineY,
 } from "../lib/canvas-utils";
@@ -173,7 +173,14 @@ function ChatContainer({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const focusAnchorRef = useRef<HTMLTextAreaElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const lastReportedH = useRef(0);
+  const lastReportedH = useRef(chatEl.measuredH ?? 0);
+  // Local mirror of the content height. Layout reads this instead of
+  // `chatEl.measuredH` so viewportH stays in sync with the DOM within a single
+  // render — the parent value lags one frame behind RO updates.
+  const [measuredH, setMeasuredH] = useState<number>(chatEl.measuredH ?? 0);
+  // Set in `onInput` so the inputText useLayoutEffect skips its redundant
+  // auto/scrollHeight reflow when the user is actively typing.
+  const heightAdjustedByInput = useRef(false);
   const [isHovered, setIsHovered] = useState(false);
 
   // Lazy rendering: only render the last N messages, load more when user scrolls up
@@ -238,12 +245,27 @@ function ChatContainer({
     return () => ob.disconnect();
   }, [renderCount, chatEl.messages.length]);
 
-  // Reset textarea height when input text changes externally (e.g. cleared after submit)
-  useEffect(() => {
+  // Reset textarea height when input text changes externally (e.g. cleared after
+  // submit). Skipped while the user is typing — onInput already handled it,
+  // and repeating the auto/scrollHeight dance makes RO see a shrink/grow cycle.
+  useLayoutEffect(() => {
+    if (heightAdjustedByInput.current) {
+      heightAdjustedByInput.current = false;
+      return;
+    }
     const ta = inputRef.current;
     if (!ta) return;
     ta.style.height = "auto";
     ta.style.height = `${ta.scrollHeight}px`;
+    const node = contentRef.current;
+    if (node) {
+      const h = node.scrollHeight;
+      if (h !== lastReportedH.current) {
+        lastReportedH.current = h;
+        setMeasuredH(h);
+        onMeasuredHeight(chatEl.id, h);
+      }
+    }
   }, [chatEl.inputText]);
 
   // Measure actual content height and report it back for canvas AABB
@@ -254,6 +276,7 @@ function ChatContainer({
       const h = node.scrollHeight;
       if (h === lastReportedH.current) return;
       lastReportedH.current = h;
+      setMeasuredH(h);
       onMeasuredHeight(chatEl.id, h);
     };
     const ro = new ResizeObserver(update);
@@ -262,13 +285,36 @@ function ChatContainer({
     return () => ro.disconnect();
   }, []);
 
-  // Compute dimensions
+  // viewportH is derived from local `measuredH` (not `chatEl.measuredH`) so it
+  // stays in sync with DOM growth within a single render — the parent's copy
+  // lags by one frame because the RO update has to round-trip through state.
   const LINE_H = chatLineHeight();
   const contentW = chatElContentWidth(chatEl);
   const totalW = contentW + CHAT_INDICATOR_MARGIN;
-  const viewportH = chatElViewportHeight(chatEl);
+  const localContentH = measuredH > 0 ? measuredH : chatElContentHeight(chatEl);
+  const viewportH = (chatEl.h != null && chatEl.h > 0)
+    ? chatEl.h
+    : Math.min(localContentH, CHAT_MAX_VISIBLE_LINES * LINE_H);
   const scrollH = viewportH;
-  const needsScroll = (lastReportedH.current || LINE_H) > scrollH;
+  const needsScroll = (localContentH || LINE_H) > scrollH;
+
+  // Sync measuredH with the live DOM after every render. This catches
+  // render-driven content growth (streaming tokens, message inserts, markdown
+  // re-parse changing line heights) before paint, so the pin-to-bottom effect
+  // below sees a viewport that already matches the content. Without this, RO
+  // delivers the new height a frame later — long enough for pin-to-bottom to
+  // scroll content up to fit the stale viewport, then snap it back down on
+  // the next render. Visible as a brief up/down twitch per token.
+  useLayoutEffect(() => {
+    const node = contentRef.current;
+    if (!node) return;
+    const h = node.scrollHeight;
+    if (h !== lastReportedH.current) {
+      lastReportedH.current = h;
+      setMeasuredH(h);
+      onMeasuredHeight(chatEl.id, h);
+    }
+  });
 
   // Pin scroll to the bottom on every render unless the user has scrolled up.
   // Uses live DOM measurements so resized chats (el.h < 20 lines) work too.
@@ -723,7 +769,21 @@ function ChatContainer({
                 const ta = e.currentTarget;
                 ta.style.height = "auto";
                 ta.style.height = `${ta.scrollHeight}px`;
-                // Scroll chat to bottom so all input lines stay visible
+                heightAdjustedByInput.current = true;
+                // Sync measured height now (batched with onChange's setState)
+                // so viewportH grows in the same render — without this, RO
+                // delivers the new height a frame later, briefly leaving
+                // content > viewport and flickering the fog/scroll on each
+                // keystroke during the expansion phase.
+                const node = contentRef.current;
+                if (node) {
+                  const h = node.scrollHeight;
+                  if (h !== lastReportedH.current) {
+                    lastReportedH.current = h;
+                    setMeasuredH(h);
+                    onMeasuredHeight(chatEl.id, h);
+                  }
+                }
                 scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
               }}
             />

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Lexend_Deca } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import DashboardShell from "@/components/DashboardShell";
 
@@ -8,6 +9,13 @@ const lexendDeca = Lexend_Deca({
   weight: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
   display: "swap",
   variable: "--font-lexend",
+});
+
+const materialSymbols = localFont({
+  src: "../public/fonts/material-symbols-outlined.woff2",
+  display: "block",
+  weight: "100 700",
+  variable: "--font-material-symbols",
 });
 
 export const metadata: Metadata = {
@@ -21,14 +29,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`dark ${lexendDeca.variable}`} suppressHydrationWarning>
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
-          rel="stylesheet"
-        />
-
-      </head>
+    <html
+      lang="en"
+      className={`dark ${lexendDeca.variable} ${materialSymbols.variable}`}
+      suppressHydrationWarning
+    >
       <body className="bg-[var(--th-bg)] text-[var(--th-text)] antialiased overflow-hidden">
         <DashboardShell>{children}</DashboardShell>
       </body>
