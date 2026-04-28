@@ -37,7 +37,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "dev": "next dev -H 127.0.0.1 -p 1948",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 1948",
     "lint": "next lint",
