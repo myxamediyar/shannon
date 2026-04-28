@@ -28,7 +28,21 @@ const EMPTY: ShannonConfig = { providers: {}, roles: {} };
 export async function readConfig(): Promise<ShannonConfig> {
   try {
     const raw = await fs.readFile(CONFIG_PATH, "utf8");
-    return validateConfig(JSON.parse(raw));
+    // Handle partially-written/empty files gracefully so users can recover by
+    // saving again instead of getting a low-level JSON parser error.
+    if (raw.trim().length === 0) return EMPTY;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e: unknown) {
+      if (e instanceof SyntaxError) {
+        throw new Error(
+          `Config file at ${CONFIG_PATH} is invalid JSON. Fix or delete it, then save again.`,
+        );
+      }
+      throw e;
+    }
+    return validateConfig(parsed);
   } catch (e: unknown) {
     if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return { providers: {}, roles: {} };
     throw e;
