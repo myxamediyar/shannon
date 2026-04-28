@@ -5,6 +5,10 @@ notes, chat, drawings, math, graphs, charts, tables, PDFs, and embeds — with
 your chosen LLM and search providers wired in. Notes and files live on your
 machine; the only network calls are to the providers you configure.
 
+## Demo
+
+[![Shannon demo](https://img.youtube.com/vi/HoNoBNYV194/maxresdefault.jpg)](https://youtu.be/HoNoBNYV194)
+
 ## Quick start
 
 Install globally and run from anywhere:
