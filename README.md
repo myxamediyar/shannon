@@ -7,7 +7,7 @@ machine; the only network calls are to the providers you configure.
 
 ## Demo
 
-[![Shannon demo](https://img.youtube.com/vi/HoNoBNYV194/maxresdefault.jpg)](https://youtu.be/HoNoBNYV194)
+[![Shannon demo](https://img.youtube.com/vi/HoNoBNYV194/maxresdefault.jpg "▶ Watch the demo on YouTube")](https://youtu.be/HoNoBNYV194)
 
 ## Quick start
 
@@ -28,7 +28,7 @@ Or, from a clone (for hacking on it):
 
 ```bash
 npm install
-npm run dev          # http://localhost:1948
+npm run dev          # http://localhost:3000
 ```
 
 The default port (1948) is the year of Shannon's *A Mathematical Theory
