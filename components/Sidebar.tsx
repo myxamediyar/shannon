@@ -1199,7 +1199,7 @@ function SidebarBody({ collapsed, onToggle }: Props) {
           <div className="mt-4 pt-3 border-t border-[var(--th-border-10)]">
             <button
               type="button"
-              onClick={() => router.push("/notes", { scroll: false })}
+              onClick={() => router.replace("/notes", { scroll: false })}
               className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[0.75rem] font-lexend tracking-tight text-[var(--th-text-secondary)] hover:bg-[var(--th-surface-hover)] transition-colors duration-150"
             >
               <span className="material-symbols-outlined text-[20px] flex-shrink-0">edit_note</span>
