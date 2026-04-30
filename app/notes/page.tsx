@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import NotesCanvas from "../../components/NotesCanvas";
+import { NotFoundView } from "../../components/NotFoundView";
 import { STORAGE_KEY } from "../../lib/canvas-types";
 
 const NOTE_COUNTER_KEY = "shannon_note_counter";
@@ -54,6 +55,10 @@ function NotesPageInner() {
   routeIdRef.current = routeId;
 
   const [notes, setNotes] = useState<NoteItem[]>([]);
+  /** True once the structural load effect below has run at least once. Until
+   *  then `notes` is empty for reasons of "we haven't checked yet", not "no
+   *  match" — so we shouldn't show the 404 view based on `notes.find` misses. */
+  const [notesLoaded, setNotesLoaded] = useState(false);
   const notesRef = useRef(notes);
   notesRef.current = notes;
   const noteCounterRef = useRef<number>(1);
@@ -107,6 +112,8 @@ function NotesPageInner() {
       setNotes(shapeNormalized);
     } catch {
       setNotes([]);
+    } finally {
+      setNotesLoaded(true);
     }
   }, []);
 
@@ -228,6 +235,19 @@ function NotesPageInner() {
       return next;
     });
   }, [activeId, saveNotes]);
+
+  // `?id=<unknown>` after notes have loaded → render the 404 view in the
+  // canvas area. The `notesLoaded` gate avoids flashing 404 during the brief
+  // window before the structural load effect has parsed localStorage.
+  if (routeId && notesLoaded && !activeNote) {
+    return (
+      <NotFoundView
+        message="No note with that id."
+        backHref="/notes"
+        backLabel="Back to notes"
+      />
+    );
+  }
 
   return (
     <NotesCanvas

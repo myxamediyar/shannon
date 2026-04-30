@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 // Pre-paint on client, no-op on server. Lets us hydrate localStorage-derived
@@ -335,7 +335,19 @@ interface Props {
   onToggle: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: Props) {
+export default function Sidebar(props: Props) {
+  // useSearchParams requires a Suspense boundary on any caller that might
+  // be statically rendered. Sidebar lives in the root layout and so renders
+  // for every route — including `/_not-found`, which Next prerenders during
+  // build. Wrapping the body keeps the requirement localized.
+  return (
+    <Suspense fallback={null}>
+      <SidebarBody {...props} />
+    </Suspense>
+  );
+}
+
+function SidebarBody({ collapsed, onToggle }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
