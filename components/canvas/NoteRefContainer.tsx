@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import type { CanvasEl, NoteItem, NoteRefEl } from "../../lib/canvas-types";
 import { NOTE_REF_W, NOTE_REF_H, STORAGE_KEY } from "../../lib/canvas-types";
 import { elementTightCanvasAabb } from "../../lib/canvas-utils";
@@ -10,6 +11,7 @@ const PREVIEW_PADDING = 8;
 type Props = CanvasChildProps<NoteRefEl>;
 
 export function NoteRefContainer({ el, activeTool }: Props) {
+  const router = useRouter();
   let targetTitle = "Untitled";
   let previewEls: CanvasEl[] = [];
   try {
@@ -50,8 +52,7 @@ export function NoteRefContainer({ el, activeTool }: Props) {
         pointerEvents: activeTool === "eraser" ? "none" : "auto",
       }}
       onDoubleClick={() => {
-        window.history.replaceState({}, "", `/notes#${el.targetNoteId}`);
-        window.dispatchEvent(new CustomEvent("notes:select", { detail: el.targetNoteId }));
+        router.push(`/notes?id=${el.targetNoteId}`, { scroll: false });
       }}
       onMouseDown={(e) => {
         if (activeTool !== "eraser" && activeTool !== "mover") e.stopPropagation();

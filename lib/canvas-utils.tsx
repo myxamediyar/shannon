@@ -975,15 +975,6 @@ export function columnAlignsWithGlyphBoundaryInText(
 }
 
 
-// ── noteIdFromHash ───────────────────────────────────────────────────────────
-
-export function noteIdFromHash(): string | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.location.hash.replace(/^#/, "").trim();
-  return raw.length > 0 ? raw : null;
-}
-
-
 // ── Erase within box ────────────────────────────────────────────────────────
 
 /**

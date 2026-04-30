@@ -122,6 +122,10 @@ export interface ChatContainerProps {
   selectionMoveLive: boolean;
   canvasScale: number;
   onInputChange: (chatElId: string, inputText: string) => void;
+  /** Fired when the chat's textarea receives focus — used by the canvas to
+   *  drop any leftover selection outline that would otherwise sit on top of
+   *  the chat the user is now editing. */
+  onInputFocus?: (chatElId: string) => void;
   onMeasuredHeight: (chatElId: string, height: number) => void;
   onResize: (chatElId: string, w: number, h: number) => void;
   onResizeLive?: (chatElId: string, w: number, h: number) => void;
@@ -138,6 +142,7 @@ function ChatContainer({
   selectionMoveLive,
   canvasScale,
   onInputChange,
+  onInputFocus,
   onMeasuredHeight,
   onResize,
   onResizeLive,
@@ -297,6 +302,25 @@ function ChatContainer({
     : Math.min(localContentH, CHAT_MAX_VISIBLE_LINES * LINE_H);
   const scrollH = viewportH;
   const needsScroll = (localContentH || LINE_H) > scrollH;
+
+  // Per-message dim box — same tokens as ChecklistItemRow's label box so the
+  // treatment matches. Spread into each message wrapper (and the input row)
+  // when chatEl.dimmed is on; off → empty object adds nothing.
+  const DIM_PAD_X = 6; // = LABEL_PAD_X in ChecklistContainer
+  const DIM_PAD_Y = 3; // = LABEL_PAD_Y in ChecklistContainer
+  const DIM_BORDER = 1; // = LABEL_BORDER in ChecklistContainer
+  const dimBoxStyle: React.CSSProperties = chatEl.dimmed
+    ? {
+        background: "var(--th-surface-hover, rgba(255,255,255,0.02))",
+        border: `${DIM_BORDER}px solid var(--th-border-20, rgba(255,255,255,0.08))`,
+        borderRadius: 4,
+        padding: `${DIM_PAD_Y}px ${DIM_PAD_X}px`,
+        marginBottom: DIM_PAD_Y,
+      }
+    : {};
+  // Total horizontal chrome the dim box adds — used to shrink the input
+  // textarea so it fits inside the padded wrapper without overflowing.
+  const dimChromeX = chatEl.dimmed ? (DIM_PAD_X + DIM_BORDER) * 2 : 0;
 
   // Sync measuredH with the live DOM after every render. This catches
   // render-driven content growth (streaming tokens, message inserts, markdown
@@ -551,6 +575,7 @@ function ChatContainer({
                     fontFamily: "var(--font-lexend), sans-serif",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
+                    ...dimBoxStyle,
                   }}
                 >
                   <span
@@ -619,6 +644,7 @@ function ChatContainer({
                 position: "relative",
                 pointerEvents: "auto",
                 userSelect: "text",
+                ...dimBoxStyle,
               }}
             >
               {/* Role indicator */}
@@ -673,7 +699,7 @@ function ChatContainer({
           })()}
 
           {/* Input textarea / stop button (hidden for ephemeral sideq chats unless streaming) */}
-          {(!chatEl.ephemeral || chatEl.isStreaming) && <div style={{ position: "relative" }}>
+          {(!chatEl.ephemeral || chatEl.isStreaming) && <div style={{ position: "relative", ...dimBoxStyle }}>
             {chatEl.isStreaming ? (
               <div
                 style={{
@@ -719,6 +745,7 @@ function ChatContainer({
               ref={inputRef}
               value={chatEl.inputText}
               readOnly={locked || chatEl.isStreaming || !!chatEl.toolStatus || activeTool === "mover"}
+              onFocus={() => onInputFocus?.(chatEl.id)}
               onChange={(e) => {
                 if (locked) return;
                 onInputChange(chatEl.id, e.target.value);
@@ -754,7 +781,7 @@ function ChatContainer({
               spellCheck={false}
               className={`m-0 bg-transparent border-0 p-0 resize-none font-lexend text-sm text-[var(--th-text)] outline-none ring-0 shadow-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 rounded-none selection:bg-[var(--th-border-30)] ${(activeTool === "mover") ? "cursor-grab select-none" : "cursor-text"}`}
               style={{
-                width: contentW,
+                width: contentW - dimChromeX,
                 minHeight: LINE_H,
                 lineHeight: `${LINE_H}px`,
                 fontSize: `${FONT_SIZE}px`,
