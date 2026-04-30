@@ -173,6 +173,9 @@ export type ChatEl = { id: string; type: "chat"; x: number; y: number; w?: numbe
   pendingSubmit?: string;
   /** Runtime-only: pairs with pendingSubmit to mark /q (ephemeral, no history append). */
   pendingSubmitIsQuick?: boolean;
+  /** Per-chat visual setting: render a translucent dim panel behind the chat
+   *  content so messages read more clearly against busy canvas backgrounds. */
+  dimmed?: boolean;
 };
 export type TextEl   = { id: string; type: "text";   x: number; y: number; text: string; html?: string; fontScale?: number; locked?: boolean; cmdLen?: number; measuredW?: number; measuredH?: number };
 

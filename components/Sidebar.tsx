@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -336,7 +336,13 @@ interface Props {
 }
 
 export default function Sidebar({ collapsed, onToggle }: Props) {
+  const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // The active note id is `?id=<noteId>` on /notes. Derived, no local state.
+  const activeNoteId = pathname.startsWith("/notes")
+    ? searchParams.get("id")
+    : null;
 
   const currentIcon =
     pathname.startsWith("/notes")
@@ -349,7 +355,6 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   const [notes, setNotes] = useState<SidebarNote[]>([]);
   const notesRef = useRef<SidebarNote[]>([]);
   notesRef.current = notes;
-  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -416,14 +421,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           JSON.stringify([persisted, ...existing]),
         );
         window.dispatchEvent(new Event("notes:updated"));
-        if (onNotesPage) {
-          window.location.hash = imported.id;
-          window.dispatchEvent(
-            new CustomEvent("notes:select", { detail: imported.id }),
-          );
-        } else {
-          window.location.href = `/notes#${imported.id}`;
-        }
+        router.push(`/notes?id=${imported.id}`, { scroll: false });
       } catch (err) {
         console.error("Import failed:", err);
         alert(
@@ -444,23 +442,18 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
 
   const handleExportHtml = (noteId: string) => {
     if (typeof window === "undefined") return;
-    if (!onNotesPage) {
-      sessionStorage.setItem(EXPORT_HTML_PENDING_KEY, noteId);
-      window.location.href = `/notes#${noteId}`;
+    // Already showing the target note — fire immediately.
+    if (activeNoteId === noteId) {
+      window.dispatchEvent(
+        new CustomEvent("notes:export-html", { detail: noteId }),
+      );
       return;
     }
-    if (activeNoteId !== noteId) {
-      window.location.hash = noteId;
-      setTimeout(() => {
-        window.dispatchEvent(
-          new CustomEvent("notes:export-html", { detail: noteId }),
-        );
-      }, 300);
-      return;
-    }
-    window.dispatchEvent(
-      new CustomEvent("notes:export-html", { detail: noteId }),
-    );
+    // Otherwise navigate, then let the canvas's mount effect re-emit the
+    // export event once the target note is active. (See NotesCanvas effect
+    // keyed on EXPORT_HTML_PENDING_KEY + activeNote.id.)
+    sessionStorage.setItem(EXPORT_HTML_PENDING_KEY, noteId);
+    router.push(`/notes?id=${noteId}`, { scroll: false });
   };
 
   useIsoLayoutEffect(() => {
@@ -527,30 +520,6 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes]);
 
-  const onNotesPage = pathname.startsWith("/notes");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const syncHash = () => {
-      const hashId = window.location.hash.replace(/^#/, "").trim();
-      setActiveNoteId(hashId || null);
-    };
-    syncHash();
-    window.addEventListener("hashchange", syncHash);
-    return () => window.removeEventListener("hashchange", syncHash);
-  }, [pathname]);
-
-  useEffect(() => {
-    const onSelect = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail;
-      setActiveNoteId(
-        id && notesRef.current.some((n) => n.id === id) ? id : null
-      );
-    };
-    window.addEventListener("notes:select", onSelect);
-    return () => window.removeEventListener("notes:select", onSelect);
-  }, []);
-
   useEffect(() => {
     if (!menuOpenId) return;
     const handler = (e: MouseEvent) => {
@@ -613,9 +582,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
       /* ignore */
     }
     if (activeNoteId === noteId) {
-      setActiveNoteId(null);
-      if (typeof window !== "undefined")
-        window.history.replaceState({}, "", "/notes");
+      router.replace("/notes", { scroll: false });
     }
     const next = removeNoteFromTree(tree, noteId);
     if (next !== tree) {
@@ -809,14 +776,9 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           />
         ) : (
           <Link
-            href={`/notes#${note.id}`}
+            href={`/notes?id=${note.id}`}
             draggable={false}
-            onClick={() => {
-              setActiveNoteId(note.id);
-              window.dispatchEvent(
-                new CustomEvent("notes:select", { detail: note.id })
-              );
-            }}
+            scroll={false}
             className={`min-w-0 flex-1 px-3 py-2 text-[0.75rem] font-lexend tracking-tight truncate ${
               isActive
                 ? "text-[var(--th-text-secondary)] font-semibold"
@@ -1225,14 +1187,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           <div className="mt-4 pt-3 border-t border-[var(--th-border-10)]">
             <button
               type="button"
-              onClick={() => {
-                if (onNotesPage) {
-                  setActiveNoteId(null);
-                  window.dispatchEvent(new Event("notes:open-blank"));
-                  return;
-                }
-                window.location.href = "/notes";
-              }}
+              onClick={() => router.push("/notes", { scroll: false })}
               className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[0.75rem] font-lexend tracking-tight text-[var(--th-text-secondary)] hover:bg-[var(--th-surface-hover)] transition-colors duration-150"
             >
               <span className="material-symbols-outlined text-[20px] flex-shrink-0">edit_note</span>

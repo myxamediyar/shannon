@@ -31,6 +31,7 @@ import { ArrowLayer } from "./canvas/ArrowLayer";
 import { PageRegionLayer } from "./canvas/PageRegionLayer";
 import { PageRegionToolbar } from "./canvas/toolbars/PageRegionToolbar";
 import { AlignmentToolbar } from "./canvas/toolbars/AlignmentToolbar";
+import { ChatToolbar } from "./canvas/toolbars/ChatToolbar";
 import { CropOverlay } from "./canvas/CropOverlay";
 import { ImageResizeOverlay } from "./canvas/toolbars/ImageResizeOverlay";
 import { InlineTextToolbar } from "./canvas/toolbars/InlineTextToolbar";
@@ -108,7 +109,7 @@ import type {
   PageSize,
   PageRotation,
 } from "../lib/canvas-types";
-import { pageRegionDims, PAGE_PRINT_SCALE, isTextBlank } from "../lib/canvas-types";
+import { pageRegionDims, PAGE_PRINT_SCALE, isTextBlank, CHAT_INDICATOR_MARGIN } from "../lib/canvas-types";
 
 import {
   snapTextLineY,
@@ -891,8 +892,11 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
   /** Persist using allElementsRef as the source of truth for elements. */
   function persistFromRef(immediate = false) {
     if (elDebounce.current) clearTimeout(elDebounce.current);
-    const aid = stateRef.current.activeId;
-    const envelope = notes.find(n => n.id === aid);
+    // Read via ref so the second op in a same-tick rapid-create sequence
+    // sees the just-created note rather than the stale closure-captured
+    // `notes` from before the create. flushSync in the create paths updates
+    // activeId synchronously; useLatest keeps activeNoteRef in step.
+    const envelope = activeNoteRef.current;
     if (!envelope || !onNoteChangeRef.current) return;
     // Strip transient fields before persisting. Image/PDF `src` is also
     // dropped here (kept only in IDB under `blobId`) so localStorage stays
@@ -1084,12 +1088,20 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
       if (onCreateNoteRef.current) {
         const note = onCreateNoteRef.current(el);
         if (note) {
-          allElementsRef.current = allElementsRef.current;
+          allElementsRef.current = note.elements;
           rebuildSpatialIndices(allElementsRef.current, spatialRef.current);
           recomputeVisible();
-          setNotes([note]);
-          setActiveId(note.id);
+          // flushSync forces the render before this function returns, so
+          // stateRef.current.activeId reflects the new id immediately. Without
+          // it, a second create call in the same tick (rapid paste, drag
+          // commit, key repeat) would re-enter the !aid branch and produce a
+          // duplicate note. Setting prevNoteIdRef *before* flushSync keeps the
+          // prop-sync effect from also resetting state when noteProp catches up.
           prevNoteIdRef.current = note.id;
+          flushSync(() => {
+            setNotes([note]);
+            setActiveId(note.id);
+          });
           setRenderTick(t => t + 1);
         }
       }
@@ -1129,8 +1141,14 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
       committedIdsRef.current.add(op.element.id);
       rebuildSpatialIndices(allElementsRef.current, spatialRef.current);
       recomputeVisible();
-      setNotes([note]);
-      setActiveId(note.id);
+      // See createNoteWithElement: flushSync prevents duplicate-create race
+      // for back-to-back spawn ops in the same tick, prevNoteIdRef keeps the
+      // prop-sync effect from resetting state when noteProp catches up.
+      prevNoteIdRef.current = note.id;
+      flushSync(() => {
+        setNotes([note]);
+        setActiveId(note.id);
+      });
       setRenderTick(t => t + 1);
       return;
     }
@@ -1211,7 +1229,13 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     setScale(DEFAULT_SCALE);
     setSelectedIds([]);
     canvasVerticalColumnXRef.current = null;
-    // recomputeVisible will run in the useLayoutEffect after offset/scale settle
+    // Populate visibleElementsRef so the new note actually paints. Originally
+    // this was deferred to onTransform after setOffset/setScale settled, but
+    // when the new note happens to land at the same offset/scale (e.g. fresh
+    // remount on route change with default 0/0/DEFAULT_SCALE) the pan-zoom
+    // hook sees no change and onTransform never fires. Do it explicitly.
+    recomputeVisible();
+    setRenderTick((t) => t + 1);
   }, [noteProp?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Same-id prop updates: parent's lazy IDB hydration (app/notes/page.tsx)
@@ -2345,13 +2369,21 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
           committedIdsRef.current.add(textId);
           rebuildSpatialIndices(allElementsRef.current, spatialRef.current);
           recomputeVisible();
-          setNotes([note]);
-          setActiveId(note.id);
-          // Mark id as already-handled so the noteProp sync effect doesn't
-          // recenter the viewport when the parent prop catches up.
+          // Order matters: prevNoteIdRef + newElIdRef must be set *before*
+          // flushSync. The layout effect that consumes newElIdRef to focus
+          // the just-spawned element runs synchronously during flushSync
+          // (notes changed → deps changed). prevNoteIdRef keeps the
+          // prop-sync effect from resetting state when noteProp catches up.
+          // flushSync ensures stateRef.current.activeId is updated before
+          // this returns, so a back-to-back placement does not re-enter
+          // the !aid branch and create a duplicate note.
           prevNoteIdRef.current = note.id;
-          setRenderTick(t => t + 1);
           newElIdRef.current = textId;
+          flushSync(() => {
+            setNotes([note]);
+            setActiveId(note.id);
+          });
+          setRenderTick(t => t + 1);
         }
       }
       return;
@@ -3341,6 +3373,34 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
             />
           )}
 
+          {/* Per-chat toolbar — appears when exactly one chat is selected.
+              Visual treatment matches PageRegionToolbar so per-element toolbars
+              feel of-a-piece. AlignmentToolbar self-hides for a single chat
+              (no align/z/ghost/crop/revert), so the two don't fight for space. */}
+          {selectionToolbarScreenPos && selectedIds.length === 1 && !cropEditingId && (() => {
+            const sel = allElementsRef.current.find(
+              (el): el is ChatEl => el.id === selectedIds[0] && el.type === "chat",
+            );
+            if (!sel) return null;
+            return (
+              <ChatToolbar
+                chatEl={sel}
+                screenPos={selectionToolbarScreenPos}
+                onToggleDim={(id) => {
+                  const cur = allElementsRef.current.find(
+                    (el): el is ChatEl => el.id === id && el.type === "chat",
+                  );
+                  if (!cur) return;
+                  execPlace({
+                    kind: "mutate",
+                    id,
+                    changes: { dimmed: cur.dimmed ? undefined : true } as Partial<ChatEl>,
+                  });
+                }}
+              />
+            );
+          })()}
+
           {selectedImage && (
             <ImageResizeOverlay
               selectedImage={selectedImage}
@@ -3662,6 +3722,12 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                       onInputChange={(id, text) => {
                         mutateChatEl(id, (chat) => ({ ...chat, inputText: text }));
                       }}
+                      onInputFocus={() => {
+                        // Focusing the chat input dismisses any lingering
+                        // selection so the bounding-box outline doesn't sit on
+                        // top of the chat the user is about to edit.
+                        if (selectedIdsRef.current.length > 0) setSelectedIds([]);
+                      }}
                       onMeasuredHeight={(id, h) => {
                         const existing = allElementsRef.current.find(e => e.id === id);
                         if (existing && existing.type === "chat" && (existing as any).measuredH === h) return;
@@ -3688,6 +3754,21 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                           node.style.width = `${w}px`;
                           node.style.height = `${h}px`;
                         });
+                        // Drag bypasses React, so the per-chat toolbar position
+                        // (derived from the AABB) is also stale until release.
+                        // Recompute its center directly off the new width so it
+                        // tracks the right edge as the user drags it. Top is
+                        // anchored at el.y and doesn't change during resize.
+                        const tb = vp.querySelector<HTMLElement>(`[data-chat-toolbar-for="${id}"]`);
+                        if (tb) {
+                          const chatEl = allElementsRef.current.find(
+                            (e): e is ChatEl => e.id === id && e.type === "chat",
+                          );
+                          if (chatEl) {
+                            const cxCanvas = chatEl.x - CHAT_INDICATOR_MARGIN + w / 2;
+                            tb.style.left = `${offset.x + cxCanvas * scale}px`;
+                          }
+                        }
                       }}
                     />
                   ))}

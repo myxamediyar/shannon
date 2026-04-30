@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import NotesCanvas from "../../components/NotesCanvas";
 import { STORAGE_KEY } from "../../lib/canvas-types";
 
 const NOTE_COUNTER_KEY = "shannon_note_counter";
-import { makeNote, noteIdFromHash } from "../../lib/canvas-utils";
+import { makeNote } from "../../lib/canvas-utils";
 import type { NoteItem, CanvasEl } from "../../lib/canvas-types";
 import { gcOrphanedBlobs, prepareNotesForDisplay, stripNotesForPersist } from "../../lib/canvas-blob-store";
 
@@ -41,19 +42,33 @@ function saveNotesToStorage(notes: NoteItem[]) {
   }
 }
 
-export default function NotesPage() {
+function NotesPageInner() {
+  const router = useRouter();
+  // Active note is identified by `?id=<noteId>`. Using a search param (not a
+  // path segment) keeps `/notes` and `/notes?id=…` resolving to the *same*
+  // page route file, so the component instance is preserved across selection
+  // changes — no remount, no canvas state wipe, no flicker.
+  const searchParams = useSearchParams();
+  const routeId = searchParams.get("id");
+  const routeIdRef = useRef(routeId);
+  routeIdRef.current = routeId;
+
   const [notes, setNotes] = useState<NoteItem[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const notesRef = useRef(notes);
   notesRef.current = notes;
   const noteCounterRef = useRef<number>(1);
   /** Note ids whose image/pdf blobs have been pulled from IDB in this session. */
   const hydratedRef = useRef<Set<string>>(new Set());
 
+  const activeNote: NoteItem | null = routeId
+    ? notes.find((n) => n.id === routeId) ?? null
+    : null;
+  const activeId = activeNote?.id ?? null;
+
   // ── Sync structural load (pre-paint) ─────────────────────────────────────
-  // Parses localStorage and sets notes + activeId without waiting for IDB.
-  // Image/pdf elements will have `blobId` but no `src` until the lazy-hydrate
-  // effect below fills them in for the active note.
+  // Parses localStorage and sets notes without waiting for IDB. Image/pdf
+  // elements will have `blobId` but no `src` until the lazy-hydrate effect
+  // below fills them in for the active note.
 
   useIsoLayoutEffect(() => {
     try {
@@ -90,11 +105,8 @@ export default function NotesPage() {
       }));
 
       setNotes(shapeNormalized);
-      const hashId = noteIdFromHash();
-      setActiveId(hashId && shapeNormalized.some((n) => n.id === hashId) ? hashId : null);
     } catch {
       setNotes([]);
-      setActiveId(null);
     }
   }, []);
 
@@ -134,6 +146,8 @@ export default function NotesPage() {
   // ── Sync with sidebar (notes:updated = sidebar changed localStorage) ────
   // Structural reload only. Already-hydrated srcs are preserved by patching
   // them onto the reloaded notes; deleted notes drop out of hydratedRef.
+  // If the active route points at a note that no longer exists (e.g. deleted
+  // in another tab), drop the search param.
 
   useEffect(() => {
     const reload = () => {
@@ -160,59 +174,15 @@ export default function NotesPage() {
         for (const id of [...hydratedRef.current]) {
           if (!existingIds.has(id)) hydratedRef.current.delete(id);
         }
-        setActiveId((prev) => {
-          if (prev && merged.some((n) => n.id === prev)) return prev;
-          return null;
-        });
+        const rid = routeIdRef.current;
+        if (rid && !existingIds.has(rid)) {
+          router.replace("/notes", { scroll: false });
+        }
       } catch { /* ignore */ }
     };
     window.addEventListener("notes:updated", reload);
     return () => window.removeEventListener("notes:updated", reload);
-  }, []);
-
-  // Cross-route nav (e.g. /settings → /notes#id) can land before the App Router
-  // has flushed the hash into window.location, so the mount effect above reads
-  // a null hash. Re-check once notes are loaded.
-  useEffect(() => {
-    if (activeId) return;
-    if (notes.length === 0) return;
-    const hashId = noteIdFromHash();
-    if (!hashId) return;
-    if (notes.some((n) => n.id === hashId)) setActiveId(hashId);
-  }, [notes, activeId]);
-
-  // ── URL hash sync + sidebar note selection ──────────────────────────────
-
-  useEffect(() => {
-    const onHashChange = () => {
-      const id = noteIdFromHash();
-      if (!id) return;
-      if (!notesRef.current.some((n) => n.id === id)) return;
-      setActiveId(id);
-    };
-    const onSelect = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail;
-      if (!id || !notesRef.current.some((n) => n.id === id)) return;
-      setActiveId(id);
-    };
-    window.addEventListener("hashchange", onHashChange);
-    window.addEventListener("notes:select", onSelect);
-    return () => {
-      window.removeEventListener("hashchange", onHashChange);
-      window.removeEventListener("notes:select", onSelect);
-    };
-  }, []);
-
-  // ── Sidebar "New Note" on notes page → open blank canvas ───────────────
-
-  useEffect(() => {
-    const onOpenBlank = () => {
-      setActiveId(null);
-      if (typeof window !== "undefined") window.history.replaceState({}, "", "/notes");
-    };
-    window.addEventListener("notes:open-blank", onOpenBlank);
-    return () => window.removeEventListener("notes:open-blank", onOpenBlank);
-  }, []);
+  }, [router]);
 
   // ── Callbacks for canvas ────────────────────────────────────────────────
 
@@ -244,14 +214,9 @@ export default function NotesPage() {
       saveNotes(next);
       return next;
     });
-    setActiveId(note.id);
-    if (typeof window !== "undefined") window.location.hash = note.id;
+    router.replace(`/notes?id=${note.id}`, { scroll: false });
     return note;
-  }, [saveNotes]);
-
-  // ── Render ──────────────────────────────────────────────────────────────
-
-  const activeNote = notes.find((n) => n.id === activeId) ?? null;
+  }, [saveNotes, router]);
 
   const handleToggleLock = useCallback(() => {
     if (!activeId) return;
@@ -272,5 +237,14 @@ export default function NotesPage() {
       locked={activeNote?.locked ?? false}
       onToggleLock={handleToggleLock}
     />
+  );
+}
+
+export default function NotesPage() {
+  // useSearchParams requires a Suspense boundary for static rendering.
+  return (
+    <Suspense fallback={null}>
+      <NotesPageInner />
+    </Suspense>
   );
 }
