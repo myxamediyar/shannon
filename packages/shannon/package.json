@@ -30,18 +30,16 @@
     "shannon": "bin/shannon.js"
   },
   "files": [
-    ".next",
-    "public",
+    "out",
     "bin",
-    "next.config.js",
     "NOTICE"
   ],
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build --webpack",
-    "start": "next start -H 127.0.0.1 -p 1948",
+    "start": "node bin/shannon.js",
     "lint": "next lint",
-    "prepack": "rm -rf .next && npm run build && rm -rf .next/cache"
+    "prepack": "rm -rf out && npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

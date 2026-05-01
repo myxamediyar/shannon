@@ -12,6 +12,20 @@ import {
   type RoleName,
 } from "../../lib/providers/registry";
 import { listProviderModelsClient } from "../../lib/providers/list-models-client";
+import { readConfig, writeConfig } from "../../lib/platform/config";
+
+type ShannonProvider = { kind: ProviderKind; apiKey: string; baseUrl?: string };
+type ShannonRole = { provider: string; model: string };
+type ShannonConfigShape = {
+  providers: Record<string, ShannonProvider>;
+  roles: Partial<Record<RoleName, ShannonRole>>;
+};
+
+function maskKey(key: string): string {
+  if (!key) return "";
+  if (key.length <= 8) return "***";
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
 
 // Module-level model-list cache: avoids re-fetching when the same provider is
 // referenced by multiple role rows or revisited within a session. 5-minute
@@ -79,10 +93,10 @@ export default function ModelPage() {
     [config, loadedSnapshot],
   );
 
-  /** Convert server-shape providers (where apiKey is the masked form) into the
-   *  client's draft-shape (apiKey="" and apiKeyHint=masked). The input then
-   *  shows the mask as a placeholder rather than as an editable value. */
-  const fromServerProviders = (
+  /** Convert raw on-disk providers (apiKey is the real key) into the client's
+   *  draft-shape (apiKey="" and apiKeyHint=masked-form). The input then shows
+   *  the mask as a placeholder rather than as an editable value. */
+  const fromRawProviders = (
     incoming: Record<string, { kind: ProviderKind; apiKey?: string; baseUrl?: string }>,
   ): Record<string, ProviderState> => {
     const out: Record<string, ProviderState> = {};
@@ -90,7 +104,7 @@ export default function ModelPage() {
       out[id] = {
         kind: p.kind,
         apiKey: "",
-        apiKeyHint: p.apiKey ?? "",
+        apiKeyHint: maskKey(p.apiKey ?? ""),
         baseUrl: p.baseUrl,
       };
     }
@@ -101,19 +115,16 @@ export default function ModelPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/config");
-        const json = await res.json();
+        const cfg = await readConfig<ShannonConfigShape>();
         if (cancelled) return;
-        if (json.status === "ok" && json.config) {
-          const next: ConfigState = {
-            providers: fromServerProviders(json.config.providers ?? {}),
-            roles: json.config.roles ?? {},
-          };
-          setConfig(next);
-          setLoadedSnapshot(next);
-        } else if (json.status === "error") {
-          setStatus({ kind: "error", message: json.message ?? "Failed to load config" });
-        }
+        const providers = cfg?.providers ?? {};
+        const roles = cfg?.roles ?? {};
+        const next: ConfigState = {
+          providers: fromRawProviders(providers),
+          roles,
+        };
+        setConfig(next);
+        setLoadedSnapshot(next);
       } catch (e) {
         if (!cancelled) {
           setStatus({
@@ -228,29 +239,32 @@ export default function ModelPage() {
     setSaving(true);
     setStatus({ kind: "idle", message: "" });
     try {
-      // Strip apiKeyHint before sending — it's a UI-only field. apiKey="" is
-      // the wire signal for "leave existing key alone".
-      const wireProviders: Record<string, { kind: ProviderKind; apiKey: string; baseUrl?: string }> = {};
+      // Read the current on-disk config so we can keep existing keys when the
+      // user leaves the input empty (or hasn't touched the masked
+      // placeholder).
+      const existing = (await readConfig<ShannonConfigShape>()) ?? {
+        providers: {},
+        roles: {},
+      };
+      const merged: ShannonConfigShape = { providers: {}, roles: config.roles };
       for (const [id, p] of Object.entries(config.providers)) {
-        wireProviders[id] = { kind: p.kind, apiKey: p.apiKey, baseUrl: p.baseUrl };
-      }
-      const res = await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config: { providers: wireProviders, roles: config.roles } }),
-      });
-      const json = await res.json();
-      if (json.status === "ok" && json.config) {
-        const next: ConfigState = {
-          providers: fromServerProviders(json.config.providers ?? {}),
-          roles: json.config.roles ?? {},
+        const ex = existing.providers[id];
+        const keepExisting =
+          !!ex && (p.apiKey === "" || p.apiKey === maskKey(ex.apiKey));
+        merged.providers[id] = {
+          kind: p.kind,
+          apiKey: keepExisting ? ex.apiKey : p.apiKey,
+          ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
         };
-        setConfig(next);
-        setLoadedSnapshot(next);
-        setStatus({ kind: "ok", message: "Saved to ~/.shannon/config.json" });
-      } else {
-        setStatus({ kind: "error", message: json.message ?? "Save failed" });
       }
+      await writeConfig(merged);
+      const next: ConfigState = {
+        providers: fromRawProviders(merged.providers),
+        roles: merged.roles,
+      };
+      setConfig(next);
+      setLoadedSnapshot(next);
+      setStatus({ kind: "ok", message: "Saved to ~/.shannon/config.json" });
     } catch (e) {
       setStatus({
         kind: "error",

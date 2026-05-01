@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.shannon.desktop",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../../shannon/out",
+    "beforeDevCommand": "cd ../.. && npm run build -w packages/shannon",
+    "beforeBuildCommand": "cd ../.. && npm run build -w packages/shannon"
   },
   "app": {
     "withGlobalTauri": true,
@@ -12,10 +14,8 @@
       {
         "label": "main",
         "title": "Shannon",
-        "url": "http://localhost:1948",
         "width": 1400,
-        "height": 900,
-        "visible": false
+        "height": 900
       }
     ],
     "security": {
