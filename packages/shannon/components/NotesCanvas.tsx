@@ -6,6 +6,9 @@ import {
   subscribePendingExport,
   getPendingExportSnapshot,
   consumePendingExport,
+  subscribePendingPrint,
+  getPendingPrintSnapshot,
+  consumePendingPrint,
 } from "../lib/canvas-actions-store";
 import RBush, { type BBox } from "rbush";
 import "katex/dist/katex.min.css";
@@ -398,6 +401,10 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
       setOffset,
       onTransform: () => recomputeVisible(),
     });
+  // Stable refs for the meta-key handler — keeps the keydown effect's deps
+  // empty while still calling the latest zoom functions.
+  const zoomByDiscreteRef = useLatest(zoomByDiscrete);
+  const zoomResetRef = useLatest(zoomCenterNormalized);
 
   const isPanning = useRef(false);
   /** If pan moved more than a few px, ignore the following click (avoid placing text after pan). */
@@ -484,26 +491,65 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     const current = activeNoteRef.current;
     if (!current || current.id !== pendingExportId) return;
     if (!consumePendingExport(pendingExportId)) return;
-    const world = canvasWorldRef.current;
-    if (!world) return;
     (async () => {
       try {
+        // Hydrate first. The lazy-hydrate effect on `activeId` may not have
+        // resolved yet (especially on cross-note exports where we just
+        // navigated), and without `src` on image/pdf elements the cloned
+        // DOM has empty <img>s. prepareNotesForDisplay is idempotent.
+        const { prepareNotesForDisplay } = await import("../lib/canvas-blob-store");
+        const { setCachedNote } = await import("../lib/platform/notes-storage");
+        const { notes: hydratedList } = await prepareNotesForDisplay([current]);
+        const target = hydratedList[0] ?? current;
+        setCachedNote(target);
+        // Two rAFs: one for React to flush the cache update, one for the
+        // browser to commit layout so cloneNode sees the post-hydrate <img src>.
+        await new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        );
+
+        const world = canvasWorldRef.current;
+        if (!world) return;
         const { exportNoteAsHtml } = await import("../lib/canvas-export-html");
-        const blob = await exportNoteAsHtml(world, current);
-        const safeName = (current.title || "Untitled").replace(/[\\/?%*:|"<>]/g, "-").trim().slice(0, 100) || "Untitled";
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${safeName}.html`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        const { saveBlobWithDialog } = await import("../lib/platform/save");
+        const blob = await exportNoteAsHtml(world, target);
+        const safeName = (target.title || "Untitled").replace(/[\\/?%*:|"<>]/g, "-").trim().slice(0, 100) || "Untitled";
+        await saveBlobWithDialog(blob, `${safeName}.html`, [
+          { name: "HTML Document", extensions: ["html", "htm"] },
+        ]);
       } catch (err) {
         console.error("HTML export failed:", err);
       }
     })();
   }, [pendingExportId, activeNote, activeNoteRef]);
+
+  // Print: same request/consume pattern as export. Picks the currently-
+  // selected page region if there is one, else the first region in the note.
+  // Selection is cleared for the print clone (so the selection outline
+  // doesn't leak into the printed output) and restored after.
+  const pendingPrintId = useSyncExternalStore(
+    subscribePendingPrint,
+    getPendingPrintSnapshot,
+    () => null,
+  );
+  useEffect(() => {
+    if (!pendingPrintId) return;
+    const current = activeNoteRef.current;
+    if (!current || current.id !== pendingPrintId) return;
+    if (!consumePendingPrint(pendingPrintId)) return;
+    const regions = current.pageRegions ?? [];
+    if (regions.length === 0) return;
+    const region = regions.find((r) => r.id === selectedPageRegionId) ?? regions[0];
+    const world = canvasWorldRef.current;
+    if (!world) return;
+    const prevSelected = selectedPageRegionId;
+    printPageRegionLib(region, {
+      world,
+      noteTitle: current.title,
+      hideSelection: () => setSelectedPageRegionId(null),
+      restoreSelection: () => setSelectedPageRegionId(prevSelected),
+    });
+  }, [pendingPrintId, activeNoteRef, selectedPageRegionId]);
 
   // ── Spatial indices (one RBush per element type) ──
   const spatialRef = useRef<SpatialIndices>(emptySpatialIndices());
@@ -1356,6 +1402,25 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
         e.preventDefault();
         if (e.shiftKey) handleRedoRef.current();
         else handleUndoRef.current();
+        return;
+      }
+
+      // ⌘= / ⌘+ / ⌘- / ⌘0 — discrete canvas zoom. Without intercepting,
+      // WKWebView (or the browser, in npm mode) handles these as page zoom,
+      // which clashes with the canvas's own scale.
+      if (key === "=" || key === "+") {
+        e.preventDefault();
+        zoomByDiscreteRef.current(1);
+        return;
+      }
+      if (key === "-") {
+        e.preventDefault();
+        zoomByDiscreteRef.current(-1);
+        return;
+      }
+      if (key === "0") {
+        e.preventDefault();
+        zoomResetRef.current();
         return;
       }
 
@@ -3433,7 +3498,7 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
           )}
 
           {/* Canvas World */}
-          <div ref={canvasWorldRef} style={{ position: "absolute", top: 0, left: 0, transformOrigin: "0 0", transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
+          <div ref={canvasWorldRef} data-canvas-world="true" style={{ position: "absolute", top: 0, left: 0, transformOrigin: "0 0", transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
             {/* Page regions — printable capture frames in canvas space */}
             <PageRegionLayer
               regions={activeNote?.pageRegions ?? []}

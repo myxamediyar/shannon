@@ -1,11 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import Sidebar from "./Sidebar";
+import MenuEventBridge from "./MenuEventBridge";
 import { useSettings } from "../lib/use-settings";
+import {
+  subscribeSidebarCollapsed,
+  getSidebarCollapsedSnapshot,
+  toggleSidebar,
+} from "../lib/sidebar-store";
 
 export default function DashboardShell({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Lifted to a module store so the native menu's Toggle Sidebar item can
+  // flip it from outside the React tree.
+  const collapsed = useSyncExternalStore(
+    subscribeSidebarCollapsed,
+    getSidebarCollapsedSnapshot,
+    () => false,
+  );
   const { settings } = useSettings();
 
   useEffect(() => {
@@ -21,7 +33,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
 
   return (
     <>
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      <MenuEventBridge />
+      <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
       <div className="flex flex-col h-screen overflow-hidden">
         <main className="flex-1 overflow-y-auto bg-[var(--th-bg)] min-h-0">
           {children}

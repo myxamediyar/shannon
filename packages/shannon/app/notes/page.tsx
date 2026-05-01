@@ -17,6 +17,7 @@ import {
   readNoteCounter,
   writeNoteCounter,
 } from "../../lib/platform/notes-storage";
+import { addRecent } from "../../lib/platform/recents";
 
 function NotesPageInner() {
   const router = useRouter();
@@ -118,6 +119,15 @@ function NotesPageInner() {
     }, 2000);
     return () => clearTimeout(timer);
   }, []);
+
+  // ── Recents: track the active note in the native File → Open Recent menu.
+  // Fires on every nav (even revisits) so re-opening bumps a note to the top,
+  // and on title changes so renames propagate to the menu label. No-op
+  // outside Tauri.
+  useEffect(() => {
+    if (!activeNote) return;
+    void addRecent(activeNote.id, activeNote.title || "Untitled");
+  }, [activeNote?.id, activeNote?.title]);
 
   // ── Canvas callbacks ────────────────────────────────────────────────────
 

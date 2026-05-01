@@ -18,6 +18,8 @@ import {
   deleteNote as deleteNoteFromStore,
   writeFolders,
 } from "../lib/platform/notes-storage";
+import { saveBlobWithDialog } from "../lib/platform/save";
+import { removeRecent, updateRecentTitle } from "../lib/platform/recents";
 import { requestExportHtml } from "../lib/canvas-actions-store";
 
 const navItems = [
@@ -30,17 +32,6 @@ type SidebarNote = { id: string; title?: string };
 
 function sanitizeFilename(name: string): string {
   return (name || "Untitled").replace(/[\\/?%*:|"<>]/g, "-").trim().slice(0, 100) || "Untitled";
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function loadFullNote(noteId: string): Promise<NoteItem | null> {
@@ -421,7 +412,11 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     const note = await loadFullNote(noteId);
     if (!note) return;
     const blob = await exportNoteAsShannon(note);
-    downloadBlob(blob, `${sanitizeFilename(note.title)}.shannon`);
+    await saveBlobWithDialog(
+      blob,
+      `${sanitizeFilename(note.title)}.shannon`,
+      [{ name: "Shannon Note", extensions: ["shannon"] }],
+    );
   };
 
   const handleExportHtml = (noteId: string) => {
@@ -479,10 +474,15 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     const newTitle = trimmed || "Untitled";
     const existing = getNote(noteId);
     if (existing) void writeNote({ ...existing, title: newTitle });
+    // Keep the native File → Open Recent label in sync when renaming a
+    // non-active note (the active-note path is covered by page.tsx's
+    // effect on activeNote.title).
+    void updateRecentTitle(noteId, newTitle);
   };
 
   const deleteNote = (noteId: string) => {
     void deleteNoteFromStore(noteId);
+    void removeRecent(noteId);
     if (activeNoteId === noteId) {
       router.replace("/notes", { scroll: false });
     }

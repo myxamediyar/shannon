@@ -214,6 +214,22 @@ function collectExternalLinks(): string {
 
 // ── Canvas rasterization ─────────────────────────────────────────────────────
 
+/** Strip editor-only attributes the cloned DOM shouldn't carry into a static
+ *  export: contenteditable (Tiptap), spellcheck, draggable. Without this, the
+ *  exported page has live ProseMirror divs the reader can edit. */
+function makeStatic(clone: HTMLElement) {
+  const editables = clone.querySelectorAll<HTMLElement>("[contenteditable]");
+  for (const node of Array.from(editables)) {
+    node.removeAttribute("contenteditable");
+    node.removeAttribute("spellcheck");
+    node.removeAttribute("draggable");
+    // ProseMirror leaves a tabindex=0 on its root so it's keyboard-focusable.
+    // In a static export it just makes the read-only div tab-focusable for no
+    // reason. Drop it.
+    if (node.getAttribute("tabindex") === "0") node.removeAttribute("tabindex");
+  }
+}
+
 function rasterizeCanvases(live: HTMLElement, clone: HTMLElement) {
   const srcList = live.querySelectorAll("canvas");
   const dstList = clone.querySelectorAll("canvas");
@@ -266,6 +282,7 @@ export async function exportNoteAsHtml(
 
   rasterizeCanvases(world, clone);
   replaceChats(clone, note.elements ?? []);
+  makeStatic(clone);
 
   clone.style.transform = "none";
   clone.style.position = "absolute";
@@ -281,8 +298,18 @@ export async function exportNoteAsHtml(
     ? (document.documentElement.classList.contains("light") ? "light" : "dark")
     : "dark";
 
+  // The next/font-generated CSS variables (--font-lexend, --font-material-
+  // symbols) point to obfuscated family names ("__variable_HASH") that map
+  // to /_next/static/media/*.woff2 — URLs that don't resolve in a standalone
+  // HTML file. Crucially, when var(--font-foo) is *defined* but the font
+  // fails to load, the browser stays with the broken family rather than
+  // falling through to the next entry in font-family. Override both vars to
+  // the actual Google-served family names so the CDN @font-face rules apply.
   const resetStyles = `
-    :root { --font-lexend: 'Lexend Deca'; }
+    :root {
+      --font-lexend: 'Lexend Deca';
+      --font-material-symbols: 'Material Symbols Outlined';
+    }
     html, body { margin: 0; padding: 0; }
     body {
       font-family: var(--font-lexend), sans-serif;
@@ -307,11 +334,19 @@ export async function exportNoteAsHtml(
     }
   `;
 
-  // Self-hosted next/font URLs aren't reachable from the exported standalone
-  // file, so load Lexend Deca from Google Fonts for the export. Inline styles
-  // in this file deliberately use the literal 'Lexend Deca' family name to
-  // match this @font-face.
-  const exportFontLink = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@100..900&display=swap">`;
+  // Self-hosted next/font URLs and webpack-bundled CSS font URLs aren't
+  // reachable from the exported standalone file, so re-source the same
+  // fonts/styles from public CDNs:
+  //  * Lexend Deca: text font, was already linked.
+  //  * Material Symbols Outlined: icon font (e.g. the checklist check).
+  //  * KaTeX: math equation styling + glyph fonts.
+  // Inline styles in this file deliberately use literal family names to
+  // match these @font-face declarations.
+  const exportFontLink = `
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@100..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+`;
 
   const html = `<!doctype html>
 <html lang="en" class="${themeClass}">
