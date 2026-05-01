@@ -52,6 +52,27 @@ const MIME = {
   ".map": "application/json; charset=utf-8",
 };
 
+// Unique tmp suffix so two concurrent writers (multiple browser tabs, or
+// browser + desktop app racing) never share the same `.tmp` file. The
+// loser's bytes go away cleanly with the unlinked tmp inode; the winner's
+// rename is what survives. Without this, both writers would clobber the
+// same `<id>.shannon.tmp` mid-flight and the rename could land partial
+// bytes on the final file.
+function tmpSuffix() {
+  return `tmp.${process.pid}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function atomicWrite(finalPath, body, options = {}) {
+  const tmp = `${finalPath}.${tmpSuffix()}`;
+  try {
+    await fsp.writeFile(tmp, body, options);
+    await fsp.rename(tmp, finalPath);
+  } catch (e) {
+    fsp.unlink(tmp).catch(() => {});
+    throw e;
+  }
+}
+
 function safeJoin(base, requestPath) {
   // Path traversal guard: resolve, then assert the result stays within base.
   const resolved = path.resolve(base, "." + requestPath);
@@ -160,9 +181,7 @@ async function handleConfigPost(req, res) {
   try {
     JSON.parse(body); // validate shape (caller is responsible for content)
     await fsp.mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    const tmp = `${CONFIG_PATH}.tmp`;
-    await fsp.writeFile(tmp, body, { mode: 0o600 });
-    await fsp.rename(tmp, CONFIG_PATH);
+    await atomicWrite(CONFIG_PATH, body, { mode: 0o600 });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok" }));
   } catch (e) {
@@ -218,10 +237,7 @@ async function handleNotePut(req, res, id) {
   try {
     JSON.parse(body); // validate shape only
     await fsp.mkdir(NOTES_DIR, { recursive: true });
-    const tmp = path.join(NOTES_DIR, `${safe}.shannon.tmp`);
-    const final = path.join(NOTES_DIR, `${safe}.shannon`);
-    await fsp.writeFile(tmp, body);
-    await fsp.rename(tmp, final);
+    await atomicWrite(path.join(NOTES_DIR, `${safe}.shannon`), body);
     jsonResponse(res, 200, { status: "ok" });
   } catch (e) {
     jsonResponse(res, 400, { error: e instanceof Error ? e.message : String(e) });
@@ -265,7 +281,9 @@ async function handleBlobsList(_req, res) {
   try {
     await fsp.mkdir(BLOBS_DIR, { recursive: true });
     const entries = await fsp.readdir(BLOBS_DIR);
-    jsonResponse(res, 200, entries);
+    // Skip stale tmp leftovers from interrupted writes.
+    const blobs = entries.filter((n) => !n.includes(".tmp."));
+    jsonResponse(res, 200, blobs);
   } catch (e) {
     jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
   }
@@ -290,10 +308,7 @@ async function handleBlobPut(req, res, id) {
   const body = await readBody(req);
   try {
     await fsp.mkdir(BLOBS_DIR, { recursive: true });
-    const tmp = path.join(BLOBS_DIR, `${safe}.tmp`);
-    const final = path.join(BLOBS_DIR, safe);
-    await fsp.writeFile(tmp, body);
-    await fsp.rename(tmp, final);
+    await atomicWrite(path.join(BLOBS_DIR, safe), body);
     jsonResponse(res, 200, { status: "ok" });
   } catch (e) {
     jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
@@ -329,9 +344,7 @@ async function handleFilePut(req, res, filePath) {
   const body = await readBody(req);
   try {
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    const tmp = `${filePath}.tmp`;
-    await fsp.writeFile(tmp, body);
-    await fsp.rename(tmp, filePath);
+    await atomicWrite(filePath, body);
     jsonResponse(res, 200, { status: "ok" });
   } catch (e) {
     jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });

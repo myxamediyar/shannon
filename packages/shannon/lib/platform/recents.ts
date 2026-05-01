@@ -42,11 +42,10 @@ async function readRecentsFile(): Promise<RecentEntry[]> {
 
 async function writeRecentsFile(items: RecentEntry[]): Promise<void> {
   if (!isTauri) return;
-  const { writeTextFile, mkdir, BaseDirectory } = await import(
-    "@tauri-apps/plugin-fs"
-  );
+  const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+  const { atomicWriteTextFile } = await import("./atomic-write");
   await mkdir(".shannon", { baseDir: BaseDirectory.Home, recursive: true });
-  await writeTextFile(RECENTS_PATH, JSON.stringify(items), {
+  await atomicWriteTextFile(RECENTS_PATH, JSON.stringify(items), {
     baseDir: BaseDirectory.Home,
   });
 }

@@ -91,11 +91,10 @@ async function writeMeta(meta: CustomBackground[]): Promise<void> {
   notify();
   const json = JSON.stringify(meta, null, 2);
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./platform/atomic-write");
     await mkdir(".shannon", { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(META_FILE, json, { baseDir: BaseDirectory.Home });
+    await atomicWriteTextFile(META_FILE, json, { baseDir: BaseDirectory.Home });
     return;
   }
   await fetch("/api/backgrounds", {

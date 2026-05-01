@@ -57,11 +57,10 @@ export async function putBlob(id: string, blob: Blob): Promise<void> {
   await initializeBlobStorage();
   const dataUrl = await blobToDataUrl(blob);
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./atomic-write");
     await mkdir(BLOBS_DIR, { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(`${BLOBS_DIR}/${id}`, dataUrl, {
+    await atomicWriteTextFile(`${BLOBS_DIR}/${id}`, dataUrl, {
       baseDir: BaseDirectory.Home,
     });
     return;
@@ -115,7 +114,9 @@ export async function listBlobIds(): Promise<string[]> {
     const entries = await readDir(BLOBS_DIR, { baseDir: BaseDirectory.Home });
     return entries
       .map((e) => e.name)
-      .filter((n): n is string => typeof n === "string" && n.length > 0);
+      .filter((n): n is string => typeof n === "string" && n.length > 0)
+      // Skip stale tmp leftovers from interrupted atomic writes.
+      .filter((n) => !n.includes(".tmp."));
   }
   const res = await fetch("/api/blobs");
   if (!res.ok) return [];

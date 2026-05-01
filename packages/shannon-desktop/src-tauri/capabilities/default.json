@@ -16,7 +16,22 @@
         { "path": "$HOME/.shannon/**" }
       ]
     },
-    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.anthropic.com/*" },
+        { "url": "https://api.openai.com/*" },
+        { "url": "https://api.perplexity.ai/*" },
+        { "url": "https://api.tavily.com/*" },
+        { "url": "https://api.search.brave.com/*" },
+        { "url": "https://openrouter.ai/*" },
+        { "url": "https://api.groq.com/*" },
+        { "url": "https://api.together.xyz/*" },
+        { "url": "https://docs.google.com/*" },
+        { "url": "http://localhost:11434/*" },
+        { "url": "http://127.0.0.1:11434/*" }
+      ]
+    },
     "fs:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
@@ -24,6 +39,7 @@
     "fs:allow-mkdir",
     "fs:allow-read-dir",
     "fs:allow-remove",
+    "fs:allow-rename",
     "dialog:default",
     {
       "identifier": "fs:scope",

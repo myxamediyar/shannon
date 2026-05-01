@@ -192,11 +192,10 @@ async function writeNoteToBackend(note: NoteItem): Promise<void> {
   const onDisk = stripNoteForDisk(note);
   const json = JSON.stringify(onDisk);
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./atomic-write");
     await mkdir(NOTES_DIR, { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(`${NOTES_DIR}/${note.id}.shannon`, json, {
+    await atomicWriteTextFile(`${NOTES_DIR}/${note.id}.shannon`, json, {
       baseDir: BaseDirectory.Home,
     });
     return;
@@ -258,11 +257,10 @@ export async function writeFolders<T = unknown>(folders: T): Promise<void> {
   notifyFolders();
   const json = JSON.stringify(folders, null, 2);
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./atomic-write");
     await mkdir(SHANNON_DIR, { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(FOLDERS_FILE, json, { baseDir: BaseDirectory.Home });
+    await atomicWriteTextFile(FOLDERS_FILE, json, { baseDir: BaseDirectory.Home });
     return;
   }
   await fetch("/api/folders", {
@@ -359,11 +357,10 @@ export async function readNoteCounter(): Promise<number> {
 
 export async function writeNoteCounter(n: number): Promise<void> {
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./atomic-write");
     await mkdir(SHANNON_DIR, { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(COUNTER_FILE, String(n), { baseDir: BaseDirectory.Home });
+    await atomicWriteTextFile(COUNTER_FILE, String(n), { baseDir: BaseDirectory.Home });
     return;
   }
   await fetch("/api/counter", {

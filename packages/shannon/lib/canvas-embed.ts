@@ -45,7 +45,11 @@ export function parseGoogleEmbedUrl(url: string): ParsedEmbed | null {
   return null;
 }
 
-/** YouTube URL (watch / youtu.be / shorts / embed) → embeddable URL, or null. */
+/** YouTube URL (watch / youtu.be / shorts / embed) → embeddable URL, or null.
+ *  In Tauri the player will throw "Error 153 video player configuration error"
+ *  because tauri://localhost can't produce a valid HTTP Referer (tracked in
+ *  tauri-apps/tauri#14422). We embed it anyway — the failure is graceful and
+ *  the embed works fine in the web/npm build. */
 export function parseYoutubeEmbedUrl(url: string): ParsedEmbed | null {
   try {
     const u = new URL(url);
@@ -63,7 +67,10 @@ export function parseYoutubeEmbedUrl(url: string): ParsedEmbed | null {
     }
     if (!videoId || !/^[A-Za-z0-9_-]{6,}$/.test(videoId)) return null;
     return {
-      embedUrl: `https://www.youtube.com/embed/${videoId}`,
+      // youtube-nocookie.com (privacy-enhanced embed) — its player accepts
+      // tauri://localhost as an embed origin; the regular youtube.com player
+      // rejects it with "Error 153 video player configuration error".
+      embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}`,
       title: "YouTube",
       provider: "youtube",
       w: YOUTUBE_W,

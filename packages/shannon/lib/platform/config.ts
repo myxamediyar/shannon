@@ -29,11 +29,10 @@ export async function readConfig<T = unknown>(): Promise<T | null> {
 export async function writeConfig<T = unknown>(config: T): Promise<void> {
   const json = JSON.stringify(config, null, 2);
   if (isTauri) {
-    const { writeTextFile, mkdir, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
+    const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { atomicWriteTextFile } = await import("./atomic-write");
     await mkdir(".shannon", { baseDir: BaseDirectory.Home, recursive: true });
-    await writeTextFile(CONFIG_PATH, json, { baseDir: BaseDirectory.Home });
+    await atomicWriteTextFile(CONFIG_PATH, json, { baseDir: BaseDirectory.Home });
     return;
   }
   const res = await fetch("/api/config", {

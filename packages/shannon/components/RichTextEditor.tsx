@@ -402,7 +402,10 @@ const RichTextEditor = memo(function RichTextEditor({
           ];
         },
       }),
-      StarterKit,
+      // StarterKit v3 bundles a Link extension that auto-detects URLs and
+      // makes them clickable. We don't want that on the canvas — text
+      // elements should stay plain text.
+      StarterKit.configure({ link: false }),
       ResizableImage.configure({ inline: true, allowBase64: true }),
     ],
     content: html,
