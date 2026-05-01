@@ -1,17 +1,19 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import NotesCanvas from "../../components/NotesCanvas";
 import { NotFoundView } from "../../components/NotFoundView";
-import { STORAGE_KEY } from "../../lib/canvas-types";
-
-const NOTE_COUNTER_KEY = "shannon_note_counter";
 import { makeNote } from "../../lib/canvas-utils";
 import type { NoteItem, CanvasEl } from "../../lib/canvas-types";
 import { gcOrphanedBlobs, prepareNotesForDisplay, stripNotesForPersist } from "../../lib/canvas-blob-store";
-
-const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+import {
+  initializeNotesStorage,
+  getAllNotes,
+  saveAllNotes,
+  readNoteCounter,
+  writeNoteCounter,
+} from "../../lib/platform/notes-storage";
 
 /** Merge hydrated srcs back into the current note, leaving every other field
  *  alone. Protects user edits made during the hydration window. */
@@ -33,14 +35,14 @@ function patchWithHydratedSrcs(current: NoteItem, hydrated: NoteItem): NoteItem 
   return { ...current, elements };
 }
 
-/** Save notes to localStorage with image/pdf `src` stripped (blobs live in IDB). */
+/** Persist notes via the platform adapter (one .shannon file per note in
+ *  Tauri / via /api/notes in web mode). Image/pdf `src` is stripped first
+ *  because blobs still live in IndexedDB until Phase 3b. */
 function saveNotesToStorage(notes: NoteItem[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stripNotesForPersist(notes)));
-  } catch (err) {
-    // Shouldn't happen once blobs are in IDB, but log for visibility.
+  saveAllNotes(stripNotesForPersist(notes)).catch((err) => {
+    // eslint-disable-next-line no-console
     console.warn("Failed to persist notes:", err);
-  }
+  });
 }
 
 function NotesPageInner() {
@@ -70,51 +72,67 @@ function NotesPageInner() {
     : null;
   const activeId = activeNote?.id ?? null;
 
-  // ── Sync structural load (pre-paint) ─────────────────────────────────────
-  // Parses localStorage and sets notes without waiting for IDB. Image/pdf
-  // elements will have `blobId` but no `src` until the lazy-hydrate effect
-  // below fills them in for the active note.
+  // ── Async structural load ────────────────────────────────────────────────
+  // Hydrates the platform adapter (reads ~/.shannon/notes/*.shannon in Tauri
+  // or fetches /api/notes in web mode), then sets notes from the cache.
+  // Image/pdf elements will have `blobId` but no `src` until the lazy-hydrate
+  // effect below fills them in for the active note.
 
-  useIsoLayoutEffect(() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const parsed: any[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await initializeNotesStorage();
+        if (cancelled) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const loaded = getAllNotes() as any[];
 
-      const saved = localStorage.getItem(NOTE_COUNTER_KEY);
-      if (saved) {
-        noteCounterRef.current = parseInt(saved, 10);
-      } else if (parsed.length > 0) {
-        const maxNum = Math.max(0, ...parsed.map((n) => {
-          const m = /^Note #(\d+)$/.exec(n.title ?? "");
-          return m ? parseInt(m[1], 10) : 0;
+        const counter = await readNoteCounter();
+        if (cancelled) return;
+        if (counter > 1) {
+          noteCounterRef.current = counter;
+        } else if (loaded.length > 0) {
+          const maxNum = Math.max(
+            0,
+            ...loaded.map((n) => {
+              const m = /^Note #(\d+)$/.exec(n.title ?? "");
+              return m ? parseInt(m[1], 10) : 0;
+            }),
+          );
+          noteCounterRef.current = maxNum + 1;
+          await writeNoteCounter(noteCounterRef.current);
+        }
+
+        const shapeNormalized: NoteItem[] = loaded.map((n) => ({
+          id: n.id,
+          title: n.title ?? "Untitled",
+          updatedAt: n.updatedAt ?? Date.now(),
+          elements: Array.isArray(n.elements)
+            ? n.elements
+            : Array.isArray(n.blocks)
+            ? n.blocks.map((b: { type?: string; [k: string]: unknown }) => ({
+                ...b,
+                type: b.type ?? "text",
+              }))
+            : n.content
+            ? [{ id: crypto.randomUUID(), type: "text", x: 120, y: 140, text: n.content }]
+            : [],
+          locked: !!n.locked,
+          pageRegions: Array.isArray(n.pageRegions) ? n.pageRegions : undefined,
         }));
-        noteCounterRef.current = maxNum + 1;
-        localStorage.setItem(NOTE_COUNTER_KEY, String(noteCounterRef.current));
+
+        if (!cancelled) setNotes(shapeNormalized);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("Failed to load notes:", e);
+        if (!cancelled) setNotes([]);
+      } finally {
+        if (!cancelled) setNotesLoaded(true);
       }
-
-      if (parsed.length === 0) return;
-
-      const shapeNormalized: NoteItem[] = parsed.map((n) => ({
-        id: n.id,
-        title: n.title ?? "Untitled",
-        updatedAt: n.updatedAt ?? Date.now(),
-        elements: Array.isArray(n.elements)
-          ? n.elements
-          : Array.isArray(n.blocks)
-          ? n.blocks.map((b: { type?: string; [k: string]: unknown }) => ({ ...b, type: b.type ?? "text" }))
-          : n.content
-          ? [{ id: crypto.randomUUID(), type: "text", x: 120, y: 140, text: n.content }]
-          : [],
-        locked: !!n.locked,
-        pageRegions: Array.isArray(n.pageRegions) ? n.pageRegions : undefined,
-      }));
-
-      setNotes(shapeNormalized);
-    } catch {
-      setNotes([]);
-    } finally {
-      setNotesLoaded(true);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ── Lazy hydrate: only fetch the active note's blobs from IDB ────────────
@@ -158,34 +176,32 @@ function NotesPageInner() {
 
   useEffect(() => {
     const reload = () => {
-      try {
-        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-        if (!Array.isArray(parsed)) return;
-        const loaded: NoteItem[] = parsed.map((n: Record<string, unknown>) => ({
-          id: n.id as string,
-          title: (n.title as string) ?? "Untitled",
-          updatedAt: (n.updatedAt as number) ?? Date.now(),
-          elements: Array.isArray(n.elements) ? (n.elements as CanvasEl[]) : [],
-          locked: !!n.locked,
-          pageRegions: Array.isArray(n.pageRegions) ? (n.pageRegions as NoteItem["pageRegions"]) : undefined,
-        }));
-        // Preserve already-hydrated blob srcs across the structural reload.
-        const prevById = new Map(notesRef.current.map((n) => [n.id, n]));
-        const merged = loaded.map((n) => {
-          const prev = prevById.get(n.id);
-          return prev ? patchWithHydratedSrcs(n, prev) : n;
-        });
-        setNotes(merged);
-        // Drop hydratedRef entries for notes that no longer exist.
-        const existingIds = new Set(merged.map((n) => n.id));
-        for (const id of [...hydratedRef.current]) {
-          if (!existingIds.has(id)) hydratedRef.current.delete(id);
-        }
-        const rid = routeIdRef.current;
-        if (rid && !existingIds.has(rid)) {
-          router.replace("/notes", { scroll: false });
-        }
-      } catch { /* ignore */ }
+      // Cache is already up-to-date — whoever fired notes:updated wrote
+      // through the platform adapter, which mutated the cache before
+      // dispatching. Just re-read it.
+      const loaded = getAllNotes().map((n) => ({
+        id: n.id,
+        title: n.title ?? "Untitled",
+        updatedAt: n.updatedAt ?? Date.now(),
+        elements: Array.isArray(n.elements) ? n.elements : ([] as CanvasEl[]),
+        locked: !!n.locked,
+        pageRegions: Array.isArray(n.pageRegions) ? n.pageRegions : undefined,
+      })) as NoteItem[];
+      // Preserve already-hydrated blob srcs across the structural reload.
+      const prevById = new Map(notesRef.current.map((n) => [n.id, n]));
+      const merged = loaded.map((n) => {
+        const prev = prevById.get(n.id);
+        return prev ? patchWithHydratedSrcs(n, prev) : n;
+      });
+      setNotes(merged);
+      const existingIds = new Set(merged.map((n) => n.id));
+      for (const id of [...hydratedRef.current]) {
+        if (!existingIds.has(id)) hydratedRef.current.delete(id);
+      }
+      const rid = routeIdRef.current;
+      if (rid && !existingIds.has(rid)) {
+        router.replace("/notes", { scroll: false });
+      }
     };
     window.addEventListener("notes:updated", reload);
     return () => window.removeEventListener("notes:updated", reload);
@@ -215,7 +231,7 @@ function NotesPageInner() {
       ...makeNote(noteCounterRef.current++),
       elements: [firstElement],
     };
-    localStorage.setItem(NOTE_COUNTER_KEY, String(noteCounterRef.current));
+    void writeNoteCounter(noteCounterRef.current);
     setNotes((prev) => {
       const next = [note, ...prev];
       saveNotes(next);

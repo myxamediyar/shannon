@@ -27,6 +27,9 @@ const URL_DISPLAY = `http://localhost:${PORT}`;
 const STATIC_DIR = path.resolve(__dirname, "..", "out");
 const CONFIG_DIR = path.join(os.homedir(), ".shannon");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
+const NOTES_DIR = path.join(CONFIG_DIR, "notes");
+const FOLDERS_PATH = path.join(CONFIG_DIR, "folders.json");
+const COUNTER_PATH = path.join(CONFIG_DIR, "note-counter.json");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -166,6 +169,114 @@ async function handleConfigPost(req, res) {
   }
 }
 
+// ── Notes (per-note file at ~/.shannon/notes/<id>.shannon) ──────────────────
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function jsonResponse(res, status, payload) {
+  const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(body);
+}
+
+function safeNoteId(id) {
+  // Reject any id that would let the path escape NOTES_DIR.
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) return null;
+  return id;
+}
+
+async function handleNotesList(_req, res) {
+  try {
+    await fsp.mkdir(NOTES_DIR, { recursive: true });
+    const entries = await fsp.readdir(NOTES_DIR);
+    const notes = [];
+    for (const name of entries) {
+      if (!name.endsWith(".shannon")) continue;
+      try {
+        const text = await fsp.readFile(path.join(NOTES_DIR, name), "utf8");
+        notes.push(JSON.parse(text));
+      } catch (e) {
+        console.warn(`shannon: skipping unreadable note ${name}: ${e.message}`);
+      }
+    }
+    jsonResponse(res, 200, notes);
+  } catch (e) {
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleNotePut(req, res, id) {
+  const safe = safeNoteId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid note id" });
+  const body = await readBody(req);
+  try {
+    JSON.parse(body); // validate shape only
+    await fsp.mkdir(NOTES_DIR, { recursive: true });
+    const tmp = path.join(NOTES_DIR, `${safe}.shannon.tmp`);
+    const final = path.join(NOTES_DIR, `${safe}.shannon`);
+    await fsp.writeFile(tmp, body);
+    await fsp.rename(tmp, final);
+    jsonResponse(res, 200, { status: "ok" });
+  } catch (e) {
+    jsonResponse(res, 400, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleNoteDelete(_req, res, id) {
+  const safe = safeNoteId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid note id" });
+  try {
+    await fsp.unlink(path.join(NOTES_DIR, `${safe}.shannon`));
+    jsonResponse(res, 200, { status: "ok" });
+  } catch (e) {
+    if (e && e.code === "ENOENT") return jsonResponse(res, 200, { status: "ok" });
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleNoteGet(_req, res, id) {
+  const safe = safeNoteId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid note id" });
+  try {
+    const text = await fsp.readFile(path.join(NOTES_DIR, `${safe}.shannon`), "utf8");
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(text);
+  } catch (e) {
+    if (e && e.code === "ENOENT") return jsonResponse(res, 404, { error: "not found" });
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+// ── Single-file JSON helpers (folders, counter) ─────────────────────────────
+
+async function handleFileGet(_req, res, filePath) {
+  try {
+    const text = await fsp.readFile(filePath, "utf8");
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(text);
+  } catch (e) {
+    if (e && e.code === "ENOENT") return jsonResponse(res, 404, null);
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleFilePut(req, res, filePath) {
+  const body = await readBody(req);
+  try {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    const tmp = `${filePath}.tmp`;
+    await fsp.writeFile(tmp, body);
+    await fsp.rename(tmp, filePath);
+    jsonResponse(res, 200, { status: "ok" });
+  } catch (e) {
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 const server = http.createServer((req, res) => {
   (async () => {
     try {
@@ -179,6 +290,33 @@ const server = http.createServer((req, res) => {
         if (req.method === "POST" || req.method === "PUT") return handleConfigPost(req, res);
         res.writeHead(405, { "Content-Type": "text/plain" });
         return res.end("method not allowed");
+      }
+      if (url.pathname === "/api/notes") {
+        if (req.method === "GET") return handleNotesList(req, res);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname.startsWith("/api/notes/")) {
+        const id = decodeURIComponent(url.pathname.slice("/api/notes/".length));
+        if (req.method === "GET") return handleNoteGet(req, res, id);
+        if (req.method === "PUT") return handleNotePut(req, res, id);
+        if (req.method === "DELETE") return handleNoteDelete(req, res, id);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname === "/api/folders") {
+        if (req.method === "GET") return handleFileGet(req, res, FOLDERS_PATH);
+        if (req.method === "PUT" || req.method === "POST")
+          return handleFilePut(req, res, FOLDERS_PATH);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname === "/api/counter") {
+        if (req.method === "GET") return handleFileGet(req, res, COUNTER_PATH);
+        if (req.method === "PUT" || req.method === "POST")
+          return handleFilePut(req, res, COUNTER_PATH);
+        res.writeHead(405);
+        return res.end();
       }
       return serveStatic(req, res);
     } catch (e) {

@@ -2,8 +2,19 @@
 
 import { useEffect } from "react";
 import { isTauri, openLink } from "@/lib/platform";
+// Side-effect import: installs the Storage.prototype patch that routes
+// shannon_notes / shannon_folders / shannon_note_counter through the
+// platform adapter (filesystem in Tauri, /api/notes etc. in npm CLI mode).
+import "@/lib/platform/legacy-storage-patch";
+import { initializeNotesStorage } from "@/lib/platform/notes-storage";
 
 export default function TauriLinkInterceptor() {
+  // Hydrate the notes storage cache as early as possible so legacy
+  // localStorage callsites read filesystem-backed data on first paint.
+  useEffect(() => {
+    void initializeNotesStorage();
+  }, []);
+
   useEffect(() => {
     if (!isTauri) return;
 
