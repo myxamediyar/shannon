@@ -1,130 +1,244 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { isTauri } from "./platform";
+import { putBlob, getBlob, deleteBlob } from "./platform/blob-storage";
 
-// ── IndexedDB wiring ────────────────────────────────────────────────────────
-
-// Note: deliberately a different DB from `lib/canvas-blob-store.ts`'s `shannon`
-// DB, so the two modules can evolve their schemas independently without
-// coordinating version bumps.
-const DB_NAME = "shannon_settings";
-const DB_VERSION = 1;
-const STORE = "backgrounds";
+// Custom canvas background images. Phase 3b moved storage from IndexedDB
+// ("shannon_settings" db, "backgrounds" store) to filesystem:
+//   - Blobs share the regular blob storage at ~/.shannon/blobs/<id>
+//   - Metadata (label, createdAt) lives at ~/.shannon/backgrounds.json
+//
+// React integration uses useSyncExternalStore — components subscribe to the
+// in-memory metaCache, every CRUD mutation rebuilds the snapshot and
+// notifies. No window events.
+//
+// Old IDB records are drained on first call to listBackgrounds() — guarded
+// by a localStorage marker so the migration runs at most once.
 
 export const IDB_PREFIX = "idb:";
 
 export type CustomBackground = { id: string; label: string; createdAt: number };
-type Record = CustomBackground & { blob: Blob };
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-function openDb(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"));
-  }
-  if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE)) {
-          db.createObjectStore(STORE, { keyPath: "id" });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  return dbPromise;
+const META_FILE = ".shannon/backgrounds.json";
+const MIGRATION_MARKER = "shannon_backgrounds_migrated_v1";
+
+let metaCache: CustomBackground[] | null = null;
+let migrationPromise: Promise<void> | null = null;
+
+// Stable snapshot for useSyncExternalStore. Sorted by createdAt so consumers
+// can render directly without re-sorting.
+let snapshot: CustomBackground[] = [];
+const subs = new Set<() => void>();
+
+function rebuildSnapshot(): void {
+  snapshot = (metaCache ?? []).slice().sort((a, b) => a.createdAt - b.createdAt);
 }
 
-function run<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  return openDb().then(
-    (db) =>
-      new Promise<T>((resolve, reject) => {
-        const t = db.transaction(STORE, mode);
-        const r = fn(t.objectStore(STORE));
-        r.onsuccess = () => resolve(r.result);
-        r.onerror = () => reject(r.error);
-      }),
-  );
+function notify(): void {
+  rebuildSnapshot();
+  for (const l of subs) l();
+}
+
+export function subscribeBackgrounds(listener: () => void): () => void {
+  subs.add(listener);
+  return () => { subs.delete(listener); };
+}
+
+export function getBackgroundsSnapshot(): CustomBackground[] {
+  return snapshot;
+}
+
+async function readMeta(): Promise<CustomBackground[]> {
+  if (metaCache) return [...metaCache];
+  if (isTauri) {
+    const { readTextFile, exists, BaseDirectory } = await import(
+      "@tauri-apps/plugin-fs"
+    );
+    if (await exists(META_FILE, { baseDir: BaseDirectory.Home })) {
+      const text = await readTextFile(META_FILE, { baseDir: BaseDirectory.Home });
+      try {
+        const parsed = JSON.parse(text) as CustomBackground[];
+        metaCache = Array.isArray(parsed) ? parsed : [];
+        notify();
+        return [...metaCache];
+      } catch {
+        metaCache = [];
+        notify();
+        return [];
+      }
+    }
+  } else {
+    try {
+      const res = await fetch("/api/backgrounds");
+      if (res.ok) {
+        const parsed = (await res.json()) as CustomBackground[];
+        metaCache = Array.isArray(parsed) ? parsed : [];
+        notify();
+        return [...metaCache];
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  metaCache = [];
+  notify();
+  return [];
+}
+
+async function writeMeta(meta: CustomBackground[]): Promise<void> {
+  metaCache = [...meta];
+  notify();
+  const json = JSON.stringify(meta, null, 2);
+  if (isTauri) {
+    const { writeTextFile, mkdir, BaseDirectory } = await import(
+      "@tauri-apps/plugin-fs"
+    );
+    await mkdir(".shannon", { baseDir: BaseDirectory.Home, recursive: true });
+    await writeTextFile(META_FILE, json, { baseDir: BaseDirectory.Home });
+    return;
+  }
+  await fetch("/api/backgrounds", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: json,
+  });
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-const CHANGE_EVENT = "shannon:custom-backgrounds";
-const emitChange = () => {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
-  }
-};
-
 export async function listBackgrounds(): Promise<CustomBackground[]> {
-  const all = (await run<Record[]>("readonly", (s) => s.getAll() as IDBRequest<Record[]>)) ?? [];
-  return all
-    .map(({ id, label, createdAt }) => ({ id, label, createdAt }))
-    .sort((a, b) => a.createdAt - b.createdAt);
+  await migrateIfNeeded();
+  const meta = await readMeta();
+  return [...meta].sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export async function getBackgroundBlob(id: string): Promise<Blob | null> {
-  const rec = (await run<Record | undefined>("readonly", (s) => s.get(id) as IDBRequest<Record | undefined>)) ?? null;
-  return rec?.blob ?? null;
+  return getBlob(id);
 }
 
 export async function addBackground(label: string, blob: Blob): Promise<string> {
   const id = crypto.randomUUID();
-  const rec: Record = { id, label, blob, createdAt: Date.now() };
-  await run("readwrite", (s) => s.add(rec));
-  emitChange();
+  await putBlob(id, blob);
+  const meta = await readMeta();
+  meta.push({ id, label, createdAt: Date.now() });
+  await writeMeta(meta);
   return id;
 }
 
 export async function renameBackground(id: string, label: string): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const t = db.transaction(STORE, "readwrite");
-    const s = t.objectStore(STORE);
-    const g = s.get(id) as IDBRequest<Record | undefined>;
-    g.onsuccess = () => {
-      const rec = g.result;
-      if (!rec) return reject(new Error("Not found"));
-      rec.label = label;
-      const p = s.put(rec);
-      p.onsuccess = () => resolve();
-      p.onerror = () => reject(p.error);
-    };
-    g.onerror = () => reject(g.error);
-  });
-  emitChange();
+  const meta = await readMeta();
+  const idx = meta.findIndex((m) => m.id === id);
+  if (idx < 0) throw new Error("Not found");
+  meta[idx] = { ...meta[idx], label };
+  await writeMeta(meta);
 }
 
 export async function deleteBackground(id: string): Promise<void> {
-  await run("readwrite", (s) => s.delete(id));
-  emitChange();
+  const meta = await readMeta();
+  await writeMeta(meta.filter((m) => m.id !== id));
+  try {
+    await deleteBlob(id);
+  } catch {
+    /* blob may already be missing — meta is the truth */
+  }
 }
 
-// ── Hook: list customs ─────────────────────────────────────────────────────
+// ── IDB → filesystem migration (one-shot, idempotent) ──────────────────────
+
+async function migrateIfNeeded(): Promise<void> {
+  if (migrationPromise) return migrationPromise;
+  migrationPromise = (async () => {
+    if (typeof localStorage !== "undefined") {
+      if (localStorage.getItem(MIGRATION_MARKER) === "true") return;
+    }
+    if (typeof indexedDB === "undefined") return;
+    let records: { id: string; label: string; createdAt: number; blob: Blob }[];
+    try {
+      records = await readLegacyBackgrounds();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[shannon] Could not read legacy backgrounds:", e);
+      return;
+    }
+    if (records.length === 0) {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(MIGRATION_MARKER, "true");
+      }
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[shannon] Migrating ${records.length} custom backgrounds from IndexedDB`,
+    );
+    const existing = await readMeta();
+    const existingIds = new Set(existing.map((m) => m.id));
+    const merged = [...existing];
+    for (const rec of records) {
+      if (existingIds.has(rec.id)) continue;
+      try {
+        await putBlob(rec.id, rec.blob);
+        merged.push({ id: rec.id, label: rec.label, createdAt: rec.createdAt });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[shannon] Failed to migrate background ${rec.id}:`, e);
+      }
+    }
+    await writeMeta(merged);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(MIGRATION_MARKER, "true");
+    }
+  })();
+  return migrationPromise;
+}
+
+function readLegacyBackgrounds(): Promise<
+  { id: string; label: string; createdAt: number; blob: Blob }[]
+> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("shannon_settings", 1);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("backgrounds")) {
+        db.close();
+        return resolve([]);
+      }
+      const tx = db.transaction("backgrounds", "readonly");
+      const r = tx.objectStore("backgrounds").getAll();
+      r.onsuccess = () => {
+        db.close();
+        resolve(
+          r.result as { id: string; label: string; createdAt: number; blob: Blob }[],
+        );
+      };
+      r.onerror = () => {
+        db.close();
+        reject(r.error);
+      };
+    };
+  });
+}
+
+// ── Hooks ──────────────────────────────────────────────────────────────────
 
 export function useCustomBackgrounds() {
-  const [list, setList] = useState<CustomBackground[]>([]);
-  const refresh = useCallback(() => {
-    listBackgrounds()
-      .then(setList)
-      .catch(() => setList([]));
-  }, []);
-  useEffect(() => {
-    refresh();
-    const handler = () => refresh();
-    window.addEventListener(CHANGE_EVENT, handler);
-    return () => window.removeEventListener(CHANGE_EVENT, handler);
-  }, [refresh]);
+  const list = useSyncExternalStore(
+    subscribeBackgrounds,
+    getBackgroundsSnapshot,
+    () => [] as CustomBackground[],
+  );
+  // Trigger initial load (and one-shot IDB migration). The listBackgrounds()
+  // call populates metaCache and notifies subscribers; subsequent renders
+  // read straight from the snapshot.
+  useEffect(() => { void listBackgrounds(); }, []);
+  const refresh = useCallback(() => { void listBackgrounds(); }, []);
   return { list, refresh };
 }
 
-// ── Hook: resolve bgImage value to a usable URL ─────────────────────────────
-
-/** If `bgImage` references an IDB-stored custom (`idb:<id>`), this fetches the
- *  blob and returns a session-scoped object URL. Returns the value unchanged
- *  for presets and "" while loading or on miss. */
+/** If `bgImage` references a stored custom (`idb:<id>` — name kept for
+ *  back-compat), this fetches the blob and returns a session-scoped object
+ *  URL. Returns the value unchanged for presets and "" while loading. */
 export function useResolvedBgImage(bgImage: string): string {
   const [resolved, setResolved] = useState<string>(() =>
     bgImage.startsWith(IDB_PREFIX) ? "" : bgImage,

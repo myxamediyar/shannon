@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,9 +44,12 @@ export function uiToRealOpacity(ui: number): number {
 
 const SETTINGS_KEY = "shannon_settings";
 
-// ── Hook ────────────────────────────────────────────────────────────────────
+// ── Module-level store (useSyncExternalStore) ───────────────────────────────
+// Shared across every useSettings() caller in the tree. Writes update the
+// snapshot synchronously, persist to localStorage, and fan out to subscribers
+// — no window events.
 
-function load(): CanvasSettings {
+function loadFromStorage(): CanvasSettings {
   if (typeof window === "undefined") return DEFAULTS;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -57,54 +60,66 @@ function load(): CanvasSettings {
   }
 }
 
-export function useSettings() {
-  const [settings, setSettings] = useState<CanvasSettings>(DEFAULTS);
+let snapshot: CanvasSettings = DEFAULTS;
+let hydrated = false;
+const subs = new Set<() => void>();
 
-  // hydrate from localStorage on mount
-  useEffect(() => { setSettings(load()); }, []);
+function hydrateOnce(): void {
+  if (hydrated) return;
+  hydrated = true;
+  snapshot = loadFromStorage();
+}
+
+function notify(): void {
+  for (const l of subs) l();
+}
+
+function subscribe(listener: () => void): () => void {
+  hydrateOnce();
+  subs.add(listener);
+  return () => { subs.delete(listener); };
+}
+
+function getSnapshot(): CanvasSettings {
+  hydrateOnce();
+  return snapshot;
+}
+
+function getServerSnapshot(): CanvasSettings {
+  return DEFAULTS;
+}
+
+function persist(next: CanvasSettings): void {
+  snapshot = next;
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    } catch (err) {
+      // Quota exceeded (e.g. custom background data-URL pushed us over the
+      // limit) — keep the in-memory update so the UI stays responsive. Next
+      // reload will lose the un-persisted change.
+      // eslint-disable-next-line no-console
+      console.warn("Settings persist failed:", err);
+    }
+  }
+  notify();
+}
+
+// ── Hook ────────────────────────────────────────────────────────────────────
+
+export function useSettings() {
+  const settings = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const update = useCallback((patch: Partial<CanvasSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
-      try {
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-      } catch (err) {
-        // Quota exceeded (e.g. custom background data-URL pushed us over the limit) —
-        // keep the in-memory update so the UI stays responsive. Next reload will
-        // lose the un-persisted change.
-        console.warn("Settings persist failed:", err);
-      }
-      queueMicrotask(() => {
-        window.dispatchEvent(new CustomEvent("shannon:settings", { detail: next }));
-      });
-      return next;
-    });
+    persist({ ...snapshot, ...patch });
   }, []);
 
   const reset = useCallback(() => {
-    try { localStorage.removeItem(SETTINGS_KEY); } catch { /* ignore */ }
-    setSettings(DEFAULTS);
-    queueMicrotask(() => {
-      window.dispatchEvent(new CustomEvent("shannon:settings", { detail: DEFAULTS }));
-    });
-  }, []);
-
-  // sync across components (same tab) + across tabs
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<CanvasSettings | undefined>).detail;
-      // Same-tab dispatch ships the new settings in `detail` so we don't have
-      // to round-trip through localStorage (which may not have the write if
-      // the persist step threw a quota error).
-      if (detail) setSettings(detail);
-      else setSettings(load()); // native `storage` event from another tab
-    };
-    window.addEventListener("shannon:settings", handler);
-    window.addEventListener("storage", handler);
-    return () => {
-      window.removeEventListener("shannon:settings", handler);
-      window.removeEventListener("storage", handler);
-    };
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem(SETTINGS_KEY); } catch { /* ignore */ }
+    }
+    snapshot = DEFAULTS;
+    notify();
   }, []);
 
   return { settings, update, reset, DEFAULTS };

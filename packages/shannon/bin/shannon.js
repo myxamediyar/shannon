@@ -30,6 +30,8 @@ const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const NOTES_DIR = path.join(CONFIG_DIR, "notes");
 const FOLDERS_PATH = path.join(CONFIG_DIR, "folders.json");
 const COUNTER_PATH = path.join(CONFIG_DIR, "note-counter.json");
+const BLOBS_DIR = path.join(CONFIG_DIR, "blobs");
+const BACKGROUNDS_PATH = path.join(CONFIG_DIR, "backgrounds.json");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -251,6 +253,65 @@ async function handleNoteGet(_req, res, id) {
   }
 }
 
+// ── Blobs (one text file per blob at ~/.shannon/blobs/<id>; body is a
+// data:<mime>;base64,... URL) ───────────────────────────────────────────────
+
+function safeBlobId(id) {
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) return null;
+  return id;
+}
+
+async function handleBlobsList(_req, res) {
+  try {
+    await fsp.mkdir(BLOBS_DIR, { recursive: true });
+    const entries = await fsp.readdir(BLOBS_DIR);
+    jsonResponse(res, 200, entries);
+  } catch (e) {
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleBlobGet(_req, res, id) {
+  const safe = safeBlobId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid blob id" });
+  try {
+    const text = await fsp.readFile(path.join(BLOBS_DIR, safe), "utf8");
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(text);
+  } catch (e) {
+    if (e && e.code === "ENOENT") return jsonResponse(res, 404, { error: "not found" });
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleBlobPut(req, res, id) {
+  const safe = safeBlobId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid blob id" });
+  const body = await readBody(req);
+  try {
+    await fsp.mkdir(BLOBS_DIR, { recursive: true });
+    const tmp = path.join(BLOBS_DIR, `${safe}.tmp`);
+    const final = path.join(BLOBS_DIR, safe);
+    await fsp.writeFile(tmp, body);
+    await fsp.rename(tmp, final);
+    jsonResponse(res, 200, { status: "ok" });
+  } catch (e) {
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function handleBlobDelete(_req, res, id) {
+  const safe = safeBlobId(id);
+  if (!safe) return jsonResponse(res, 400, { error: "invalid blob id" });
+  try {
+    await fsp.unlink(path.join(BLOBS_DIR, safe));
+    jsonResponse(res, 200, { status: "ok" });
+  } catch (e) {
+    if (e && e.code === "ENOENT") return jsonResponse(res, 200, { status: "ok" });
+    jsonResponse(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 // ── Single-file JSON helpers (folders, counter) ─────────────────────────────
 
 async function handleFileGet(_req, res, filePath) {
@@ -315,6 +376,26 @@ const server = http.createServer((req, res) => {
         if (req.method === "GET") return handleFileGet(req, res, COUNTER_PATH);
         if (req.method === "PUT" || req.method === "POST")
           return handleFilePut(req, res, COUNTER_PATH);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname === "/api/blobs") {
+        if (req.method === "GET") return handleBlobsList(req, res);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname.startsWith("/api/blobs/")) {
+        const id = decodeURIComponent(url.pathname.slice("/api/blobs/".length));
+        if (req.method === "GET") return handleBlobGet(req, res, id);
+        if (req.method === "PUT") return handleBlobPut(req, res, id);
+        if (req.method === "DELETE") return handleBlobDelete(req, res, id);
+        res.writeHead(405);
+        return res.end();
+      }
+      if (url.pathname === "/api/backgrounds") {
+        if (req.method === "GET") return handleFileGet(req, res, BACKGROUNDS_PATH);
+        if (req.method === "PUT" || req.method === "POST")
+          return handleFilePut(req, res, BACKGROUNDS_PATH);
         res.writeHead(405);
         return res.end();
       }

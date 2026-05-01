@@ -2,7 +2,7 @@
 // shannon_* keys (shannon_notes, shannon_folders, shannon_note_counter).
 //
 // Layout under ~/.shannon/:
-//   notes/<id>.shannon  — one file per note (JSON)
+//   notes/<id>.shannon  — one file per note (JSON, blob srcs stripped)
 //   folders.json        — folder tree (single JSON object)
 //   note-counter.json   — running counter for "Note #N" titles
 //
@@ -11,18 +11,17 @@
 // /api/notes, /api/folders, /api/counter on the local CLI server, which
 // reads/writes the same files.
 //
-// Strategy: per-note files are loaded into an in-memory Map at startup so
-// the React layer can keep its synchronous read-from-state pattern.
-// Writes mutate the cache synchronously and queue a per-file write; the
-// caller can `await` if they need to know the disk is current.
+// React integration: components read the cache via useSyncExternalStore
+// (subscribeNotes/getNotesSnapshot, subscribeFolders/getFoldersSnapshot).
+// Every write updates the cache, rebuilds the snapshot, and notifies
+// subscribers — no window events, no localStorage round-trip.
 //
 // Migration: on first run, if the filesystem is empty and localStorage
 // has data, the localStorage values are drained into the filesystem.
-// This is what recovers existing notes after Phase 2d/e changed origins.
+// This recovers existing notes after Phase 2d/e changed origins.
 
 import { isTauri } from "./index";
-import type { NoteItem } from "@/lib/canvas-types";
-import { rawLocalStorageGet } from "./legacy-storage-patch";
+import type { CanvasEl, NoteItem } from "@/lib/canvas-types";
 
 const NOTES_DIR = ".shannon/notes";
 const FOLDERS_FILE = ".shannon/folders.json";
@@ -33,23 +32,61 @@ const cache = new Map<string, NoteItem>();
 let initialized = false;
 let initializing: Promise<void> | null = null;
 
-function notify() {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event("notes:updated"));
-  }
+// ── Subscription primitives (useSyncExternalStore) ──────────────────────────
+
+const notesListeners = new Set<() => void>();
+let notesSnapshot: NoteItem[] = [];
+
+const foldersListeners = new Set<() => void>();
+let foldersSnapshot: unknown = null;
+
+function notifyNotes(): void {
+  notesSnapshot = [...cache.values()];
+  for (const l of notesListeners) l();
 }
 
-export function getAllNotes(): NoteItem[] {
-  return [...cache.values()];
+function notifyFolders(): void {
+  for (const l of foldersListeners) l();
 }
+
+export function subscribeNotes(listener: () => void): () => void {
+  notesListeners.add(listener);
+  return () => { notesListeners.delete(listener); };
+}
+
+export function getNotesSnapshot(): NoteItem[] {
+  return notesSnapshot;
+}
+
+export function subscribeFolders(listener: () => void): () => void {
+  foldersListeners.add(listener);
+  return () => { foldersListeners.delete(listener); };
+}
+
+export function getFoldersSnapshot<T = unknown>(): T | null {
+  return foldersSnapshot as T | null;
+}
+
+// ── Strip blob srcs on disk (kept here so callers don't need to remember) ──
+
+function stripNoteForDisk(note: NoteItem): NoteItem {
+  const elements = (note.elements ?? []).map((el) => {
+    if ((el.type === "image" || el.type === "pdf") && el.blobId && el.src) {
+      const { src: _drop, ...rest } = el;
+      return rest as CanvasEl;
+    }
+    return el;
+  });
+  return { ...note, elements };
+}
+
+// ── Sync getters ───────────────────────────────────────────────────────────
 
 export function getNote(id: string): NoteItem | null {
   return cache.get(id) ?? null;
 }
 
-export function isNotesStorageReady(): boolean {
-  return initialized;
-}
+// ── Init ───────────────────────────────────────────────────────────────────
 
 export async function initializeNotesStorage(): Promise<void> {
   if (initialized) return;
@@ -60,17 +97,8 @@ export async function initializeNotesStorage(): Promise<void> {
     await loadFoldersIntoCache();
     initialized = true;
     initializing = null;
-    // Wake legacy listeners that may have read empty localStorage on mount.
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "shannon_notes", newValue: "" }),
-      );
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "shannon_folders", newValue: "" }),
-      );
-      window.dispatchEvent(new Event("notes:updated"));
-      window.dispatchEvent(new Event("folders:updated"));
-    }
+    notifyNotes();
+    notifyFolders();
   })();
   return initializing;
 }
@@ -117,10 +145,8 @@ async function loadAllFromBackend(): Promise<void> {
 
 async function migrateFromLocalStorageIfNeeded(): Promise<void> {
   if (cache.size > 0) return; // backend already populated
-  // Read RAW localStorage — bypasses the Storage.prototype patch so the
-  // migration sees the original data the user had stored, not the (empty)
-  // adapter cache the patched getItem would otherwise return.
-  const raw = rawLocalStorageGet("shannon_notes");
+  if (typeof localStorage === "undefined") return;
+  const raw = localStorage.getItem("shannon_notes");
   if (!raw) return;
   try {
     const parsed = JSON.parse(raw) as NoteItem[];
@@ -145,14 +171,26 @@ async function migrateFromLocalStorageIfNeeded(): Promise<void> {
   }
 }
 
+// ── Mutations ──────────────────────────────────────────────────────────────
+
 export async function writeNote(note: NoteItem): Promise<void> {
   cache.set(note.id, note);
+  notifyNotes();
   await writeNoteToBackend(note);
-  notify();
+}
+
+/** Update the cache for a note without writing to disk. Used by the lazy
+ *  blob-hydrate path: `src` is added back to image/pdf elements so consumers
+ *  see them, but the on-disk file (which has src stripped) doesn't need
+ *  rewriting. */
+export function setCachedNote(note: NoteItem): void {
+  cache.set(note.id, note);
+  notifyNotes();
 }
 
 async function writeNoteToBackend(note: NoteItem): Promise<void> {
-  const json = JSON.stringify(note);
+  const onDisk = stripNoteForDisk(note);
+  const json = JSON.stringify(onDisk);
   if (isTauri) {
     const { writeTextFile, mkdir, BaseDirectory } = await import(
       "@tauri-apps/plugin-fs"
@@ -173,6 +211,7 @@ async function writeNoteToBackend(note: NoteItem): Promise<void> {
 
 export async function deleteNote(id: string): Promise<void> {
   cache.delete(id);
+  notifyNotes();
   if (isTauri) {
     const { remove, exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
     const filePath = `${NOTES_DIR}/${id}.shannon`;
@@ -182,26 +221,22 @@ export async function deleteNote(id: string): Promise<void> {
   } else {
     await fetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
-  notify();
 }
 
 /** Diff against current cache and persist additions/changes/deletions. */
 export async function saveAllNotes(notes: NoteItem[]): Promise<void> {
   const newIds = new Set(notes.map((n) => n.id));
-  // Sync cache eagerly so any interleaved getAllNotes() sees the new state.
   for (const n of notes) cache.set(n.id, n);
   for (const oldId of [...cache.keys()]) {
     if (!newIds.has(oldId)) cache.delete(oldId);
   }
-  // Then persist.
+  notifyNotes();
   await Promise.all(notes.map((n) => writeNoteToBackend(n)));
   const removed: string[] = [];
   for (const oldId of [...cache.keys()]) {
     if (!newIds.has(oldId)) removed.push(oldId);
   }
-  // (the cache deletion already happened above; only need to remove the file)
   await Promise.all(removed.map((id) => deleteNoteFile(id)));
-  notify();
 }
 
 async function deleteNoteFile(id: string): Promise<void> {
@@ -218,43 +253,9 @@ async function deleteNoteFile(id: string): Promise<void> {
 
 // ── Folders (single JSON object) ───────────────────────────────────────────
 
-export async function readFolders<T = unknown>(): Promise<T | null> {
-  if (isTauri) {
-    const { readTextFile, exists, BaseDirectory } = await import(
-      "@tauri-apps/plugin-fs"
-    );
-    if (await exists(FOLDERS_FILE, { baseDir: BaseDirectory.Home })) {
-      const text = await readTextFile(FOLDERS_FILE, { baseDir: BaseDirectory.Home });
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    }
-  } else {
-    try {
-      const res = await fetch("/api/folders");
-      if (res.ok) return (await res.json()) as T;
-    } catch {
-      /* fall through to localStorage migration */
-    }
-  }
-  // Migration: bypass the patch and read raw localStorage so we see the
-  // user's original data even after the adapter has installed itself.
-  const raw = rawLocalStorageGet("shannon_folders");
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as T;
-      await writeFolders(parsed); // persist forward so we don't migrate twice
-      return parsed;
-    } catch {
-      /* ignore */
-    }
-  }
-  return null;
-}
-
 export async function writeFolders<T = unknown>(folders: T): Promise<void> {
+  foldersSnapshot = folders;
+  notifyFolders();
   const json = JSON.stringify(folders, null, 2);
   if (isTauri) {
     const { writeTextFile, mkdir, BaseDirectory } = await import(
@@ -271,30 +272,52 @@ export async function writeFolders<T = unknown>(folders: T): Promise<void> {
   });
 }
 
-// ── Folders sync cache (for legacy localStorage patch) ─────────────────────
-// Sidebar.tsx reads/writes localStorage["shannon_folders"] synchronously in
-// many places. The adapter is async, so we keep a synchronous mirror that
-// the patched Storage.prototype.getItem returns.
-
-let foldersCache: string | null = null;
-
-export async function loadFoldersIntoCache(): Promise<void> {
-  const folders = await readFolders<unknown>();
-  foldersCache = folders ? JSON.stringify(folders) : null;
-}
-
-export function getFoldersStringSync(): string | null {
-  return foldersCache;
-}
-
-export async function writeFoldersFromString(json: string): Promise<void> {
-  foldersCache = json;
-  try {
-    const parsed = JSON.parse(json);
-    await writeFolders(parsed);
-  } catch {
-    /* malformed input — leave cache, skip persist */
+async function readFoldersFromBackend(): Promise<unknown> {
+  if (isTauri) {
+    const { readTextFile, exists, BaseDirectory } = await import(
+      "@tauri-apps/plugin-fs"
+    );
+    if (await exists(FOLDERS_FILE, { baseDir: BaseDirectory.Home })) {
+      const text = await readTextFile(FOLDERS_FILE, { baseDir: BaseDirectory.Home });
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
+  try {
+    const res = await fetch("/api/folders");
+    if (res.ok) return await res.json();
+  } catch {
+    /* fall through to localStorage migration */
+  }
+  return null;
+}
+
+async function loadFoldersIntoCache(): Promise<void> {
+  const fromBackend = await readFoldersFromBackend();
+  if (fromBackend != null) {
+    foldersSnapshot = fromBackend;
+    return;
+  }
+  // Migration: read raw localStorage so we see the user's pre-Phase-3 data
+  // even after the storage shim has been removed.
+  if (typeof localStorage !== "undefined") {
+    const raw = localStorage.getItem("shannon_folders");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        foldersSnapshot = parsed;
+        await writeFolders(parsed); // persist forward; this also re-notifies
+        return;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  foldersSnapshot = null;
 }
 
 // ── Note counter ───────────────────────────────────────────────────────────
@@ -321,12 +344,14 @@ export async function readNoteCounter(): Promise<number> {
       /* fall through */
     }
   }
-  const raw = rawLocalStorageGet("shannon_note_counter");
-  if (raw) {
-    const n = parseInt(raw, 10);
-    if (Number.isFinite(n)) {
-      await writeNoteCounter(n);
-      return n;
+  if (typeof localStorage !== "undefined") {
+    const raw = localStorage.getItem("shannon_note_counter");
+    if (raw) {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n)) {
+        await writeNoteCounter(n);
+        return n;
+      }
     }
   }
   return 1;

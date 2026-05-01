@@ -1,7 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
+import {
+  subscribePendingExport,
+  getPendingExportSnapshot,
+  consumePendingExport,
+} from "../lib/canvas-actions-store";
 import RBush, { type BBox } from "rbush";
 import "katex/dist/katex.min.css";
 import {
@@ -45,7 +50,6 @@ import {
   rasterizeShapeGroups,
   serializeElements,
 } from "../lib/canvas-serialize";
-import { stripBlobSrcsForPersist } from "../lib/canvas-blob-store";
 import * as drags from "../lib/canvas-drags";
 import type { DragDeps, ImageResizeDragState } from "../lib/canvas-drags";
 import { dispatchSlashCommand } from "../lib/canvas-commands";
@@ -464,15 +468,25 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
   const activeNote = notes.find((n) => n.id === activeId) ?? null;
   const activeNoteRef = useLatest(activeNote);
 
-  // HTML export: sidebar (or any code) dispatches `notes:export-html` with a
-  // note id. We run the export against the live world DOM if that note is the
-  // currently-active one. Cross-page navigation is handled via sessionStorage.
+  // HTML export: sidebar (or anywhere) parks a request in the
+  // canvas-actions store with `requestExportHtml(noteId)`. We subscribe and,
+  // whenever the request targets the currently-active note, consume it and
+  // run the export against the live world DOM. This works both for the
+  // already-active case and the navigate-then-export case, since the store
+  // outlives the cross-route mount.
+  const pendingExportId = useSyncExternalStore(
+    subscribePendingExport,
+    getPendingExportSnapshot,
+    () => null,
+  );
   useEffect(() => {
-    const run = async (noteId: string) => {
-      const current = activeNoteRef.current;
-      if (!current || current.id !== noteId) return;
-      const world = canvasWorldRef.current;
-      if (!world) return;
+    if (!pendingExportId) return;
+    const current = activeNoteRef.current;
+    if (!current || current.id !== pendingExportId) return;
+    if (!consumePendingExport(pendingExportId)) return;
+    const world = canvasWorldRef.current;
+    if (!world) return;
+    (async () => {
       try {
         const { exportNoteAsHtml } = await import("../lib/canvas-export-html");
         const blob = await exportNoteAsHtml(world, current);
@@ -488,26 +502,8 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
       } catch (err) {
         console.error("HTML export failed:", err);
       }
-    };
-    const onEvent = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail;
-      if (id) void run(id);
-    };
-    window.addEventListener("notes:export-html", onEvent);
-    return () => window.removeEventListener("notes:export-html", onEvent);
-  }, [activeNoteRef]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const pending = sessionStorage.getItem("shannon_export_html_pending");
-    if (!pending || activeNote?.id !== pending) return;
-    sessionStorage.removeItem("shannon_export_html_pending");
-    requestAnimationFrame(() => {
-      window.dispatchEvent(
-        new CustomEvent("notes:export-html", { detail: pending }),
-      );
-    });
-  }, [activeNote]);
+    })();
+  }, [pendingExportId, activeNote, activeNoteRef]);
 
   // ── Spatial indices (one RBush per element type) ──
   const spatialRef = useRef<SpatialIndices>(emptySpatialIndices());
@@ -897,10 +893,11 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     // activeId synchronously; useLatest keeps activeNoteRef in step.
     const envelope = activeNoteRef.current;
     if (!envelope || !onNoteChangeRef.current) return;
-    // Strip transient fields before persisting. Image/PDF `src` is also
-    // dropped here (kept only in IDB under `blobId`) so localStorage stays
-    // within its ~5-10 MB quota.
-    const elements = stripBlobSrcsForPersist(allElementsRef.current).map(el => {
+    // Strip transient fields before persisting (chat streaming flags, math
+    // measurements, etc). Blob `src` on image/pdf is left intact here — the
+    // notes-storage layer drops it when writing to disk and rehydrates from
+    // ~/.shannon/blobs/<id> on read.
+    const elements = allElementsRef.current.map(el => {
       if (el.type === "chat") return (({ isStreaming: _, estimatedOutputTokens: __, pendingSubmit: ___, pendingSubmitIsQuick: ____, ...c }) => c)(el as ChatEl) as ChatEl;
       if (el.type === "math") return (({ measuredW: _, measuredH: __, ...m }) => m)(el as MathEl) as MathEl;
       if (el.type === "table") return { ...el, cells: stripTableCellMeasures(el.cells) };

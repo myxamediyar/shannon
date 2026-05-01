@@ -1,75 +1,37 @@
-// IndexedDB-backed store for heavy element payloads (images, PDFs).
+// Filesystem-backed store for heavy element payloads (images, PDFs).
 //
-// Context: localStorage caps at 5-10 MB, which a single pasted PDF or a
-// handful of images blows past — the app is otherwise client-side-only, so
-// moving blobs to IDB keeps that property while lifting the quota to
-// browser-default (typically 50+ GB).
+// Convention: element.src is a `data:` URL in memory (so rendering and
+// LLM serialization work unchanged). On persist, `src` is stripped and
+// only `blobId` survives. On load, `src` is hydrated from disk via the
+// platform adapter (lib/platform/blob-storage.ts) — files live at
+// ~/.shannon/blobs/<id> in both Tauri and npm CLI modes.
 //
-// Convention: element.src is a data URL in memory (so rendering and LLM
-// serialization work unchanged). On persist to localStorage, `src` is
-// stripped and only `blobId` survives. On load, `src` is hydrated from IDB.
+// Phase 3b moved the underlying storage from IndexedDB to filesystem
+// (origin-independent), but kept the same put/get/delete/list surface
+// so consumers (notes hydration, GC) didn't have to change.
 
 import type { CanvasEl, ImageEl, NoteItem, PdfEl } from "./canvas-types";
-
-const DB_NAME = "shannon";
-const STORE = "blobs";
-const DB_VERSION = 1;
-
-let dbPromise: Promise<IDBDatabase> | null = null;
-
-function openDB(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return dbPromise;
-}
+import {
+  putBlob as putBlobFs,
+  getBlob as getBlobFs,
+  deleteBlob as deleteBlobFs,
+  listBlobIds as listBlobIdsFs,
+} from "./platform/blob-storage";
 
 export async function putBlob(blobId: string, blob: Blob): Promise<void> {
-  const db = await openDB();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put(blob, blobId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
+  return putBlobFs(blobId, blob);
 }
 
 export async function getBlob(blobId: string): Promise<Blob | null> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(blobId);
-    req.onsuccess = () => resolve((req.result as Blob | undefined) ?? null);
-    req.onerror = () => reject(req.error);
-  });
+  return getBlobFs(blobId);
 }
 
 export async function deleteBlob(blobId: string): Promise<void> {
-  const db = await openDB();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).delete(blobId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  return deleteBlobFs(blobId);
 }
 
 export async function listBlobIds(): Promise<string[]> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).getAllKeys();
-    req.onsuccess = () => resolve(req.result as string[]);
-    req.onerror = () => reject(req.error);
-  });
+  return listBlobIdsFs();
 }
 
 // ── Data URL ↔ Blob converters ────────────────────────────────────────────

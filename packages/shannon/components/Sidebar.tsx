@@ -2,25 +2,29 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
-// Pre-paint on client, no-op on server. Lets us hydrate localStorage-derived
-// state into the very first painted frame instead of flashing empty.
-const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 import type { NoteItem } from "../lib/canvas-types";
 import { prepareNotesForDisplay, stripNotesForPersist } from "../lib/canvas-blob-store";
 import { exportNoteAsShannon, importShannonNote } from "../lib/canvas-export-shannon";
+import {
+  subscribeNotes,
+  getNotesSnapshot,
+  subscribeFolders,
+  getFoldersSnapshot,
+  getNote,
+  writeNote,
+  deleteNote as deleteNoteFromStore,
+  writeFolders,
+} from "../lib/platform/notes-storage";
+import { requestExportHtml } from "../lib/canvas-actions-store";
 
 const navItems = [
   { icon: "dashboard", label: "Dashboard", href: "/" },
   { icon: "tune", label: "Model", href: "/model" },
   { icon: "settings", label: "Settings", href: "/settings" },
 ];
-
-const NOTES_STORAGE_KEY = "shannon_notes";
-const FOLDERS_STORAGE_KEY = "shannon_folders";
-const EXPORT_HTML_PENDING_KEY = "shannon_export_html_pending";
 
 type SidebarNote = { id: string; title?: string };
 
@@ -40,27 +44,10 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 async function loadFullNote(noteId: string): Promise<NoteItem | null> {
-  try {
-    const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-    const parsed = JSON.parse(raw ?? "[]");
-    if (!Array.isArray(parsed)) return null;
-    const found = parsed.find(
-      (n: Record<string, unknown>) => n && n.id === noteId,
-    );
-    if (!found) return null;
-    const normalized: NoteItem = {
-      id: found.id,
-      title: typeof found.title === "string" ? found.title : "Untitled",
-      updatedAt: typeof found.updatedAt === "number" ? found.updatedAt : Date.now(),
-      elements: Array.isArray(found.elements) ? found.elements : [],
-      locked: !!found.locked,
-      pageRegions: Array.isArray(found.pageRegions) ? found.pageRegions : undefined,
-    };
-    const { notes } = await prepareNotesForDisplay([normalized]);
-    return notes[0] ?? null;
-  } catch {
-    return null;
-  }
+  const found = getNote(noteId);
+  if (!found) return null;
+  const { notes } = await prepareNotesForDisplay([found]);
+  return notes[0] ?? null;
 }
 
 // Unified sidebar tree. Root holds notes and folders interleaved; folders hold
@@ -119,7 +106,11 @@ function sanitizeTree(raw: unknown): TreeItem[] {
   return out;
 }
 
-function migrateOldFormat(oldFolders: unknown, noteFolder: unknown): TreeItem[] {
+function migrateOldFormat(
+  oldFolders: unknown,
+  noteFolder: unknown,
+  noteIds: string[],
+): TreeItem[] {
   if (!Array.isArray(oldFolders)) return [];
   const nf: Record<string, string> =
     noteFolder && typeof noteFolder === "object"
@@ -129,17 +120,6 @@ function migrateOldFormat(oldFolders: unknown, noteFolder: unknown): TreeItem[] 
           ) as [string, string][]
         )
       : {};
-  let noteIds: string[] = [];
-  try {
-    const parsed = JSON.parse(localStorage.getItem(NOTES_STORAGE_KEY) ?? "[]");
-    if (Array.isArray(parsed)) {
-      noteIds = parsed
-        .map((n: unknown) => (n as { id?: unknown })?.id)
-        .filter((id): id is string => typeof id === "string");
-    }
-  } catch {
-    /* ignore */
-  }
   const tree: TreeItem[] = [];
   const folderMap = new Map<string, TreeFolder>();
   for (const f of oldFolders as unknown[]) {
@@ -161,32 +141,16 @@ function migrateOldFormat(oldFolders: unknown, noteFolder: unknown): TreeItem[] 
   return tree;
 }
 
-function readTree(): TreeItem[] {
-  try {
-    const raw = localStorage.getItem(FOLDERS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return [];
-    if (Array.isArray((parsed as { tree?: unknown }).tree)) {
-      return sanitizeTree((parsed as { tree: unknown }).tree);
-    }
-    // Old {folders, noteFolder} → migrate lazily.
-    const oldFolders = (parsed as { folders?: unknown }).folders;
-    const oldMap = (parsed as { noteFolder?: unknown }).noteFolder;
-    if (Array.isArray(oldFolders)) return migrateOldFormat(oldFolders, oldMap);
-    return [];
-  } catch {
-    return [];
+function parseTree(raw: unknown, noteIds: string[]): TreeItem[] {
+  if (!raw || typeof raw !== "object") return [];
+  if (Array.isArray((raw as { tree?: unknown }).tree)) {
+    return sanitizeTree((raw as { tree: unknown }).tree);
   }
-}
-
-function writeTree(tree: TreeItem[]) {
-  try {
-    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify({ tree }));
-  } catch {
-    /* ignore */
-  }
-  window.dispatchEvent(new Event("folders:updated"));
+  // Old {folders, noteFolder} → migrate lazily.
+  const oldFolders = (raw as { folders?: unknown }).folders;
+  const oldMap = (raw as { noteFolder?: unknown }).noteFolder;
+  if (Array.isArray(oldFolders)) return migrateOldFormat(oldFolders, oldMap, noteIds);
+  return [];
 }
 
 function cloneTree(tree: TreeItem[]): TreeItem[] {
@@ -364,15 +328,30 @@ function SidebarBody({ collapsed, onToggle }: Props) {
             pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
         )?.icon ?? "dashboard";
 
-  const [notes, setNotes] = useState<SidebarNote[]>([]);
-  const notesRef = useRef<SidebarNote[]>([]);
+  // Notes and folder tree come straight from the storage layer's pub/sub.
+  // No local copy, no event listeners, no localStorage round-trip — every
+  // mutation goes through writeNote/deleteNoteFromStore/writeFolders, which
+  // updates the cache and notifies subscribers.
+  const allNotes = useSyncExternalStore(subscribeNotes, getNotesSnapshot, () => []);
+  const notes = useMemo<SidebarNote[]>(
+    () => allNotes.map((n) => ({ id: n.id, title: n.title })),
+    [allNotes],
+  );
+  const notesRef = useRef<SidebarNote[]>(notes);
   notesRef.current = notes;
+
+  const foldersRaw = useSyncExternalStore(subscribeFolders, getFoldersSnapshot<unknown>, () => null);
+  const tree = useMemo<TreeItem[]>(
+    () => parseTree(foldersRaw, notes.map((n) => n.id)),
+    [foldersRaw, notes],
+  );
+  const writeTree = (next: TreeItem[]) => { void writeFolders({ tree: next }); };
+
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const [tree, setTree] = useState<TreeItem[]>([]);
   const [folderMenuOpenId, setFolderMenuOpenId] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [folderRenameValue, setFolderRenameValue] = useState("");
@@ -425,14 +404,7 @@ function SidebarBody({ collapsed, onToggle }: Props) {
       try {
         const imported = await importShannonNote(file);
         const persisted = stripNotesForPersist([imported])[0];
-        const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-        const parsed = JSON.parse(raw ?? "[]");
-        const existing = Array.isArray(parsed) ? parsed : [];
-        localStorage.setItem(
-          NOTES_STORAGE_KEY,
-          JSON.stringify([persisted, ...existing]),
-        );
-        window.dispatchEvent(new Event("notes:updated"));
+        await writeNote(persisted);
         router.push(`/notes?id=${imported.id}`, { scroll: false });
       } catch (err) {
         console.error("Import failed:", err);
@@ -454,79 +426,23 @@ function SidebarBody({ collapsed, onToggle }: Props) {
 
   const handleExportHtml = (noteId: string) => {
     if (typeof window === "undefined") return;
-    // Already showing the target note — fire immediately.
-    if (activeNoteId === noteId) {
-      window.dispatchEvent(
-        new CustomEvent("notes:export-html", { detail: noteId }),
-      );
-      return;
+    // Park the request in the canvas-actions store and navigate (or just
+    // re-fire if we're already on the target note). The canvas subscribes
+    // to the store and consumes the request once its active id matches.
+    requestExportHtml(noteId);
+    if (activeNoteId !== noteId) {
+      router.push(`/notes?id=${noteId}`, { scroll: false });
     }
-    // Otherwise navigate, then let the canvas's mount effect re-emit the
-    // export event once the target note is active. (See NotesCanvas effect
-    // keyed on EXPORT_HTML_PENDING_KEY + activeNote.id.)
-    sessionStorage.setItem(EXPORT_HTML_PENDING_KEY, noteId);
-    router.push(`/notes?id=${noteId}`, { scroll: false });
   };
 
-  useIsoLayoutEffect(() => {
-    const readNotes = () => {
-      try {
-        const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-        const parsed = JSON.parse(raw ?? "[]");
-        if (!Array.isArray(parsed)) {
-          setNotes([]);
-          return;
-        }
-        setNotes(
-          parsed
-            .filter(
-              (n): n is SidebarNote =>
-                !!n && typeof n === "object" && typeof n.id === "string"
-            )
-            .map((n) => ({ id: n.id, title: n.title }))
-        );
-      } catch {
-        setNotes([]);
-      }
-    };
-    const onFocus = () => readNotes();
-    const onNotesUpdated = () => readNotes();
-    const onStorage = (e: StorageEvent) => {
-      if (!e.key || e.key === NOTES_STORAGE_KEY) readNotes();
-    };
-    readNotes();
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("notes:updated", onNotesUpdated);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("notes:updated", onNotesUpdated);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  useEffect(() => {
-    const load = () => setTree(readTree());
-    const onStorage = (e: StorageEvent) => {
-      if (!e.key || e.key === FOLDERS_STORAGE_KEY) load();
-    };
-    load();
-    window.addEventListener("folders:updated", load);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener("folders:updated", load);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  // Reconcile: add new notes to root, strip nodes for deleted notes.
+  // Reconcile: add new notes to root, strip nodes for deleted notes. The
+  // store already drives re-renders when notes/folders change; this effect
+  // just persists the diff back when the live `notes` set has drifted from
+  // the tree (note added/deleted elsewhere).
   useEffect(() => {
     const ids = new Set(notes.map((n) => n.id));
     const { tree: next, dirty } = reconcileTree(tree, ids);
-    if (dirty) {
-      setTree(next);
-      writeTree(next);
-    }
+    if (dirty) writeTree(next);
     // Depend only on notes to avoid reconcile loops when tree changes are
     // already consistent with notes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -561,47 +477,17 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     const trimmed = renameValue.trim();
     setRenamingId(null);
     const newTitle = trimmed || "Untitled";
-    setNotes((prev) =>
-      prev.map((n) => (n.id === noteId ? { ...n, title: newTitle } : n))
-    );
-    try {
-      const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-      const parsed = JSON.parse(raw ?? "[]");
-      if (Array.isArray(parsed)) {
-        const updated = parsed.map((n: Record<string, unknown>) =>
-          n && n.id === noteId ? { ...n, title: newTitle } : n
-        );
-        localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(updated));
-      }
-    } catch {
-      /* ignore */
-    }
-    window.dispatchEvent(new Event("notes:updated"));
+    const existing = getNote(noteId);
+    if (existing) void writeNote({ ...existing, title: newTitle });
   };
 
   const deleteNote = (noteId: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== noteId));
-    try {
-      const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-      const parsed = JSON.parse(raw ?? "[]");
-      if (Array.isArray(parsed)) {
-        const updated = parsed.filter(
-          (n: Record<string, unknown>) => n && n.id !== noteId
-        );
-        localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(updated));
-      }
-    } catch {
-      /* ignore */
-    }
+    void deleteNoteFromStore(noteId);
     if (activeNoteId === noteId) {
       router.replace("/notes", { scroll: false });
     }
     const next = removeNoteFromTree(tree, noteId);
-    if (next !== tree) {
-      setTree(next);
-      writeTree(next);
-    }
-    window.dispatchEvent(new Event("notes:updated"));
+    if (next !== tree) writeTree(next);
   };
 
   const createFolder = () => {
@@ -617,7 +503,6 @@ function SidebarBody({ collapsed, onToggle }: Props) {
       children: [],
     };
     const next = [folder, ...tree];
-    setTree(next);
     writeTree(next);
     setFolderRenameValue(folder.name);
     setRenamingFolderId(id);
@@ -629,7 +514,6 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     );
     if (!current) return;
     const next = updateFolder(tree, folderId, { expanded: !current.expanded });
-    setTree(next);
     writeTree(next);
   };
 
@@ -638,13 +522,11 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     setRenamingFolderId(null);
     const name = trimmed || "Untitled";
     const next = updateFolder(tree, folderId, { name });
-    setTree(next);
     writeTree(next);
   };
 
   const deleteFolder = (folderId: string) => {
     const next = removeFolder(tree, folderId);
-    setTree(next);
     writeTree(next);
   };
 
@@ -658,7 +540,6 @@ function SidebarBody({ collapsed, onToggle }: Props) {
     }
     const next = moveItem(working, itemId, target);
     if (next === working && working === tree) return;
-    setTree(next);
     writeTree(next);
   };
 
