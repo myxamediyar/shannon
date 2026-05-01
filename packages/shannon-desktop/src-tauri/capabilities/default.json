@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:1948/*"]
+  },
   "permissions": [
     "core:default",
     "opener:default"

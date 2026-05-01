@@ -3,6 +3,7 @@ import { Lexend_Deca } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 import DashboardShell from "@/components/DashboardShell";
+import TauriLinkInterceptor from "@/components/TauriLinkInterceptor";
 
 const lexendDeca = Lexend_Deca({
   subsets: ["latin"],
@@ -35,6 +36,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="bg-[var(--th-bg)] text-[var(--th-text)] antialiased overflow-hidden">
+        <TauriLinkInterceptor />
         <DashboardShell>{children}</DashboardShell>
       </body>
     </html>
