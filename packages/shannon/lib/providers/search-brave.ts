@@ -15,13 +15,15 @@ export async function braveSearch(params: {
   query: string;
   /** "web" | "news" — defaults to "web" if omitted or unknown. */
   vertical?: string;
+  fetchImpl?: typeof fetch;
 }): Promise<SearchResult> {
+  const fetchImpl = params.fetchImpl ?? fetch;
   const vertical = (BRAVE_VERTICALS as readonly string[]).includes(params.vertical ?? "")
     ? (params.vertical as BraveVertical)
     : "web";
   const path = `/${vertical}/search`;
   const url = `${params.baseUrl.replace(/\/+$/, "")}${path}?q=${encodeURIComponent(params.query)}&count=5`;
-  const res = await fetch(url, {
+  const res = await fetchImpl(url, {
     method: "GET",
     headers: {
       Accept: "application/json",

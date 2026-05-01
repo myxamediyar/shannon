@@ -11,9 +11,11 @@ export async function tavilySearch(params: {
    *  values pass through to the API which returns a clear error. */
   searchDepth?: string;
   query: string;
+  fetchImpl?: typeof fetch;
 }): Promise<SearchResult> {
+  const fetchImpl = params.fetchImpl ?? fetch;
   const url = `${params.baseUrl.replace(/\/+$/, "")}/search`;
-  const res = await fetch(url, {
+  const res = await fetchImpl(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

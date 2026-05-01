@@ -10,11 +10,16 @@ export type OpenAICompatRequest = {
   messages: OpenAICompatMessage[];
   temperature?: number;
   stream?: boolean;
+  /** Caller-provided fetch — lets the SPA route through platformFetch
+   *  (Tauri http plugin in desktop, /api/proxy in web). Defaults to global
+   *  fetch for the legacy server-side callers. */
+  fetchImpl?: typeof fetch;
 };
 
 export async function openAICompatChat(req: OpenAICompatRequest): Promise<Response> {
+  const fetchImpl = req.fetchImpl ?? fetch;
   const url = `${req.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-  return fetch(url, {
+  return fetchImpl(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${req.apiKey}`,

@@ -11,63 +11,12 @@ import { streamAnthropicChat } from "@/lib/chat/stream-anthropic";
 import { streamOpenAICompatChat } from "@/lib/chat/stream-openai-compat";
 import { createAnthropicBrowser } from "./anthropic-browser";
 import { platformFetch } from "@/lib/platform/http";
-import { readConfig as readPlatformConfig } from "@/lib/platform/config";
-import type { ProviderKind, RoleName } from "./registry";
-
-// Mirror of ShannonConfig from lib/providers/config.ts — duplicated here
-// because that file imports node:fs and can't be referenced from client
-// bundles.
-type ShannonProvider = { kind: ProviderKind; apiKey: string; baseUrl?: string };
-type ShannonRole = { provider: string; model: string };
-type ShannonConfigShape = {
-  providers: Record<string, ShannonProvider>;
-  roles: Partial<Record<RoleName, ShannonRole>>;
-};
-
-type ResolvedRole = {
-  kind: ProviderKind;
-  apiKey: string;
-  baseUrl?: string;
-  model: string;
-};
-
-function resolveRoleFromConfig(
-  cfg: ShannonConfigShape,
-  name: RoleName,
-): ResolvedRole {
-  const role = cfg.roles[name];
-  if (!role) {
-    throw new Error(
-      `No provider configured for role "${name}". Open /model in the sidebar to set one up.`,
-    );
-  }
-  const provider = cfg.providers[role.provider];
-  if (!provider) {
-    throw new Error(
-      `Role "${name}" points to provider "${role.provider}" which isn't configured. Open /model to fix.`,
-    );
-  }
-  if (!provider.apiKey) {
-    throw new Error(
-      `Provider "${role.provider}" has no API key. Open /model to add one.`,
-    );
-  }
-  return {
-    kind: provider.kind,
-    apiKey: provider.apiKey,
-    baseUrl: provider.baseUrl,
-    model: role.model,
-  };
-}
+import { resolveClientRole, type ResolvedRole } from "./resolve-client";
+import { runWebSearchClient } from "./websearch-client";
+import { readEmbedClient } from "./read-embed-client";
 
 export async function loadChatRole(): Promise<ResolvedRole> {
-  const cfg = await readPlatformConfig<ShannonConfigShape>();
-  if (!cfg) {
-    throw new Error(
-      "No config found. Open /model in the sidebar to set up a chat provider.",
-    );
-  }
-  return resolveRoleFromConfig(cfg, "chat");
+  return resolveClientRole("chat");
 }
 
 function buildApiMessages(
@@ -138,6 +87,11 @@ export async function* streamChat(
   const ctx = {
     sidebarNotes: args.sidebarNotes,
     emit,
+    // Defaults for the server-tool callbacks. Canvas-specific callbacks
+    // (rasterizeShapes etc.) come from args.callbacks below — they're
+    // owned by the consumer because they need canvas state.
+    webSearch: runWebSearchClient,
+    readEmbed: readEmbedClient,
     ...args.callbacks,
   };
 

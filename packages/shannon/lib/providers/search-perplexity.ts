@@ -11,11 +11,13 @@ export async function perplexitySearch(params: {
   baseUrl: string;
   model: string;
   query: string;
+  fetchImpl?: typeof fetch;
 }): Promise<SearchResult> {
   const res = await openAICompatChat({
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
     model: params.model,
+    fetchImpl: params.fetchImpl,
     messages: [
       {
         role: "system",
