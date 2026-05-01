@@ -4,7 +4,7 @@
 // uses the compacted state.
 
 import type { RefObject } from "react";
-import { postCompactRequest } from "../chat-client";
+import { compactChat } from "../providers/compact";
 import type { ChatContextMessage, ChatEl, ChatMessage } from "../canvas-types";
 
 export type CompactArgs = {
@@ -53,7 +53,7 @@ export async function compactChatHistory(args: CompactArgs): Promise<CompactResu
 
   let res;
   try {
-    res = await postCompactRequest(history, keepLastN);
+    res = await compactChat(history, keepLastN);
   } catch (e) {
     chatMutate(chat.id, (c) => ({ ...c, toolStatus: null, messages: stripPlaceholder(c.messages) }));
     return { ok: false, summarizedCount: 0, error: e instanceof Error ? e.message : String(e) };

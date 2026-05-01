@@ -56,7 +56,6 @@ import type { ChecklistOpsDeps } from "../lib/canvas-checklist-ops";
 import { stripChecklistItemMeasures } from "../lib/canvas-checklist-ops";
 import { placeImageBlob as placeImageBlobLib, placePdfBlob as placePdfBlobLib } from "../lib/canvas-file-drop";
 import { printPageRegion as printPageRegionLib } from "../lib/canvas-print";
-import { postToolCallback } from "../lib/chat-client";
 import {
   handleTextBackspace,
   handleTextEscape,
@@ -3612,110 +3611,95 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                         lastSentVisibleRef,
                         readAllElements: () => allElementsRef.current,
                         resolvePos: (chatElId, args, w, h) => resolvePos(chatElId, args, w, h),
-                        handleLegacyEvent: (_chatElId, ev) => {
-                          // Advanced tool capabilities — each calls back to /api/chat/rasterize-shapes
-                          // with a callbackId so the backend can match the tool response to its call.
-                          // These stay shell-side (not inside the hook) because they need pdfjs/
-                          // localStorage/rasterization helpers that are canvas-scoped.
-                          if (ev.type === "rasterize_shapes") {
+                        toolCallbacks: {
+                          rasterizeShapes: async () => {
                             const shapeArrowEls = allElementsRef.current.filter(
                               (e): e is ShapeEl | ArrowEl => e.type === "shape" || e.type === "arrow"
                             );
                             const { images, descriptions } = rasterizeShapeGroups(shapeArrowEls);
-                            const groups = images.map((img, i) => ({ image: img.data, description: descriptions[i] ?? "" }));
-                            void postToolCallback(ev.callbackId, JSON.stringify({ groups }));
-                          } else if (ev.type === "read_pdf_page") {
-                            const { callbackId, filename, page } = ev;
+                            return {
+                              groups: images.map((img, i) => ({
+                                image: img.data,
+                                description: descriptions[i] ?? "",
+                              })),
+                            };
+                          },
+                          readPdfPage: async (filename, page) => {
                             const pdfEl = allElementsRef.current.find(
                               (e): e is PdfEl => e.type === "pdf" && e.filename === filename
                             );
-                            if (!pdfEl) {
-                              void postToolCallback(callbackId, JSON.stringify({ error: `PDF "${filename}" not found on canvas.` }));
-                            } else if (page < 1 || page > pdfEl.numPages) {
-                              void postToolCallback(callbackId, JSON.stringify({ error: `Page ${page} out of range (1-${pdfEl.numPages}).` }));
-                            } else {
-                              (async () => {
-                                try {
-                                  const pdfjsLib = await import("pdfjs-dist");
-                                  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-                                    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-                                      "pdfjs-dist/build/pdf.worker.min.mjs",
-                                      import.meta.url,
-                                    ).toString();
-                                  }
-                                  const raw = atob(pdfEl.src.split(",")[1]);
-                                  const arr = new Uint8Array(raw.length);
-                                  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-                                  const doc = await pdfjsLib.getDocument({ data: arr }).promise;
-                                  const pg = await doc.getPage(page);
-                                  const viewport = pg.getViewport({ scale: 2 });
-                                  const c = document.createElement("canvas");
-                                  c.width = viewport.width;
-                                  c.height = viewport.height;
-                                  const ctx = c.getContext("2d")!;
-                                  await pg.render({ canvas: c, canvasContext: ctx, viewport }).promise;
-                                  const base64 = c.toDataURL("image/png").split(",")[1];
-                                  void postToolCallback(callbackId, JSON.stringify({ image: base64 }));
-                                } catch (e) {
-                                  void postToolCallback(callbackId, JSON.stringify({ error: `Failed to render page: ${e instanceof Error ? e.message : String(e)}` }));
-                                }
-                              })();
+                            if (!pdfEl) return { error: `PDF "${filename}" not found on canvas.` };
+                            if (page < 1 || page > pdfEl.numPages) {
+                              return { error: `Page ${page} out of range (1-${pdfEl.numPages}).` };
                             }
-                          } else if (ev.type === "read_note") {
-                            const { callbackId, noteId } = ev;
-                            let content = "";
+                            try {
+                              const pdfjsLib = await import("pdfjs-dist");
+                              if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                                pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+                                  "pdfjs-dist/build/pdf.worker.min.mjs",
+                                  import.meta.url,
+                                ).toString();
+                              }
+                              const raw = atob(pdfEl.src.split(",")[1]);
+                              const arr = new Uint8Array(raw.length);
+                              for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+                              const doc = await pdfjsLib.getDocument({ data: arr }).promise;
+                              const pg = await doc.getPage(page);
+                              const viewport = pg.getViewport({ scale: 2 });
+                              const c = document.createElement("canvas");
+                              c.width = viewport.width;
+                              c.height = viewport.height;
+                              const ctx = c.getContext("2d")!;
+                              await pg.render({ canvas: c, canvasContext: ctx, viewport }).promise;
+                              const base64 = c.toDataURL("image/png").split(",")[1];
+                              return { image: base64 };
+                            } catch (e) {
+                              return { error: `Failed to render page: ${e instanceof Error ? e.message : String(e)}` };
+                            }
+                          },
+                          readNote: async (noteId) => {
                             try {
                               const allNotes: NoteItem[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
                               const target = allNotes.find(n => n.id === noteId);
-                              if (!target) content = `Note with id="${noteId}" not found.`;
-                              else {
-                                const { text } = serializeElements(target.elements ?? []);
-                                content = `Title: ${target.title || "Untitled"}\n${text}`;
-                              }
+                              if (!target) return `Note with id="${noteId}" not found.`;
+                              const { text } = serializeElements(target.elements ?? []);
+                              return `Title: ${target.title || "Untitled"}\n${text}`;
                             } catch (e) {
-                              content = `Error reading note: ${e instanceof Error ? e.message : String(e)}`;
+                              return `Error reading note: ${e instanceof Error ? e.message : String(e)}`;
                             }
-                            void postToolCallback(callbackId, content);
-                          } else if (ev.type === "read_current_note") {
-                            const { callbackId } = ev;
-                            let content = "";
+                          },
+                          readCurrentNote: async () => {
                             try {
                               const els = allElementsRef.current;
                               const { text } = serializeElements(els);
-                              content = `Title: ${noteProp?.title || "Untitled"}\n${text}`;
+                              return `Title: ${noteProp?.title || "Untitled"}\n${text}`;
                             } catch (e) {
-                              content = `Error reading current note: ${e instanceof Error ? e.message : String(e)}`;
+                              return `Error reading current note: ${e instanceof Error ? e.message : String(e)}`;
                             }
-                            void postToolCallback(callbackId, content);
-                          } else if (ev.type === "read_chat") {
-                            const { callbackId, chatNumber, offset, count } = ev;
-                            let content = "";
+                          },
+                          readChat: async (chatNumber, offset, count) => {
                             try {
                               const target = allElementsRef.current.find(
                                 e => e.type === "chat" && (e as ChatEl).chatNumber === chatNumber && !(e as ChatEl).ephemeral,
                               ) as ChatEl | undefined;
-                              if (!target) content = `Chat #${chatNumber} not found.`;
-                              else {
-                                const msgs = target.messages.filter(m => m.content && m.content !== "…");
-                                const total = msgs.length;
-                                const start = Math.max(0, Math.floor(offset));
-                                const slice = msgs.slice(start, start + count);
-                                if (slice.length === 0) {
-                                  content = `Chat #${chatNumber} has ${total} messages; offset ${start} is past the end.`;
-                                } else {
-                                  const end = start + slice.length;
-                                  const more = end < total
-                                    ? `More messages available — call read_chat with offset=${end} to continue.`
-                                    : "End of chat.";
-                                  const body = slice.map((m, i) => `[${start + i}] ${m.role}: ${m.content}`).join("\n\n");
-                                  content = `Chat #${chatNumber}, messages ${start}–${end - 1} of ${total}:\n\n${body}\n\n${more}`;
-                                }
+                              if (!target) return `Chat #${chatNumber} not found.`;
+                              const msgs = target.messages.filter(m => m.content && m.content !== "…");
+                              const total = msgs.length;
+                              const start = Math.max(0, Math.floor(offset));
+                              const slice = msgs.slice(start, start + count);
+                              if (slice.length === 0) {
+                                return `Chat #${chatNumber} has ${total} messages; offset ${start} is past the end.`;
                               }
+                              const end = start + slice.length;
+                              const more = end < total
+                                ? `More messages available — call read_chat with offset=${end} to continue.`
+                                : "End of chat.";
+                              const body = slice.map((m, i) => `[${start + i}] ${m.role}: ${m.content}`).join("\n\n");
+                              return `Chat #${chatNumber}, messages ${start}–${end - 1} of ${total}:\n\n${body}\n\n${more}`;
                             } catch (e) {
-                              content = `Error reading chat: ${e instanceof Error ? e.message : String(e)}`;
+                              return `Error reading chat: ${e instanceof Error ? e.message : String(e)}`;
                             }
-                            void postToolCallback(callbackId, content);
-                          }
+                          },
                         },
                         onStreamComplete: () => persistFromRef(true),
                       }}

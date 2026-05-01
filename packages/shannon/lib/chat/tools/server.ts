@@ -1,10 +1,13 @@
-// Server-only tools: everything here runs entirely inside the Node process —
-// no browser participation, no round-trip to the client. Network calls to
-// third-party APIs (Perplexity, Google Docs) live here, and so do the
-// sidebar-notes queries that operate on data the client shipped with the
-// chat request.
+// Tools that historically ran server-only: network calls to third-party
+// APIs (Perplexity for web_search, Google Docs for read_embed) and pure
+// data lookups against the sidebar-notes the request shipped with.
+//
+// After Phase 2b, web_search and read_embed dispatch through ctx callbacks
+// the client provides — they no longer reach for the legacy server-side
+// runWebSearch (which couldn't be bundled into client code anyway because
+// it imports node:fs through lib/providers/config). find_note and
+// list_notes are pure data operations and stay here.
 
-import { runWebSearch } from "@/lib/websearch";
 import type { ToolContext, ToolOutcome } from "./types";
 
 export const SERVER_TOOL_NAMES = new Set([
@@ -21,9 +24,9 @@ export async function executeServerTool(
 ): Promise<ToolOutcome> {
   switch (name) {
     case "web_search":
-      return webSearch(input);
+      return webSearch(input, ctx);
     case "read_embed":
-      return readEmbed(input);
+      return readEmbed(input, ctx);
     case "find_note":
       return findNote(input, ctx);
     case "list_notes":
@@ -33,31 +36,36 @@ export async function executeServerTool(
   }
 }
 
-async function webSearch(input: Record<string, unknown>): Promise<ToolOutcome> {
+async function webSearch(
+  input: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolOutcome> {
+  if (!ctx.webSearch) {
+    return {
+      text: "Web search is not available in this client. Phase 2c will wire up the client-side runWebSearch.",
+    };
+  }
   try {
-    const { answer, citations } = await runWebSearch(input.query as string);
+    const { answer, citations } = await ctx.webSearch(input.query as string);
     return { text: answer, citations };
   } catch (e) {
     return { text: `Web search error: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
-async function readEmbed(input: Record<string, unknown>): Promise<ToolOutcome> {
+async function readEmbed(
+  input: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolOutcome> {
   const { embed_url, title } = input as { embed_url: string; title: string };
-  const exportUrl = embedUrlToExportUrl(embed_url);
-  if (!exportUrl) return { text: `Could not determine export URL for "${title}".` };
-  try {
-    const res = await fetch(exportUrl, { redirect: "follow" });
-    if (!res.ok) {
-      return {
-        text: `Failed to fetch document: ${res.status} ${res.statusText}. Make sure the document is shared as "Anyone with the link".`,
-      };
-    }
-    const text = await res.text();
-    const trimmed = text.slice(0, 50000);
+  if (!ctx.readEmbed) {
     return {
-      text: `Content of "${title}":\n\n${trimmed}${text.length > 50000 ? "\n\n[...truncated]" : ""}`,
+      text: "Reading embeds is not available in this client. Phase 2c will wire up direct Google Docs export fetches via platformFetch.",
     };
+  }
+  try {
+    const text = await ctx.readEmbed(embed_url, title);
+    return { text };
   } catch (e) {
     return { text: `Error fetching document: ${e instanceof Error ? e.message : String(e)}` };
   }

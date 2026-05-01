@@ -1,9 +1,19 @@
-// Client-callback tools: the server asks the browser to perform work it can't
-// do itself (DOM rendering, IndexedDB blob reads, reading other chats' local
-// state) and awaits the result. Mechanism: register a Promise in the
-// tool-callback registry, emit an SSE event with the callbackId, let the
-// browser do its thing, then the browser POSTs the result to
-// /api/chat/tool-callback which resolves the Promise.
+// Tools that need browser-side work (DOM rendering, IndexedDB, localStorage,
+// canvas state). Two execution modes:
+//
+//   1. Direct (preferred): when ctx supplies the callback functions
+//      (rasterizeShapes, readPdfPage, etc.), we call them synchronously in
+//      the same client-side process. This is the new path used by the SPA's
+//      streamChat generator.
+//
+//   2. SSE-callback dance (legacy fallback): when ctx doesn't supply the
+//      callbacks (i.e. we're running inside the legacy server-side
+//      /api/chat route), emit an SSE event with a callbackId and await the
+//      browser's POST to /api/chat/tool-callback. Will be removed in
+//      Phase 2c when the legacy route is deleted.
+//
+// The dual-path keeps the legacy server route working while the migration
+// is in progress.
 
 import { registerCallback } from "@/lib/tool-callbacks";
 import type { ToolContext, ToolOutcome, ToolImage } from "./types";
@@ -49,28 +59,43 @@ async function awaitCallback(callbackId: string, timeoutMs: number): Promise<str
 }
 
 async function rasterizeShapes(ctx: ToolContext): Promise<ToolOutcome> {
+  if (ctx.rasterizeShapes) {
+    try {
+      const { groups } = await ctx.rasterizeShapes();
+      return formatRasterizeOutcome(groups);
+    } catch (e) {
+      return { text: `Rasterization failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+  // Legacy SSE-callback path
   const callbackId = crypto.randomUUID();
   ctx.emit({ type: "rasterize_shapes", callbackId });
   const payload = await awaitCallback(callbackId, RASTERIZE_TIMEOUT_MS);
   if (!payload) return { text: "Rasterization timed out — the frontend did not respond." };
   try {
     const parsed = JSON.parse(payload) as { groups: { image: string; description: string }[] };
-    if (parsed.groups.length === 0) {
-      return {
-        text:
-          "No shape groups found — there are no overlapping or touching shapes/arrows on the canvas.",
-      };
-    }
-    const images: ToolImage[] = [];
-    const texts: string[] = [];
-    for (const g of parsed.groups) {
-      texts.push(g.description);
-      if (g.image) images.push({ mediaType: "image/png", data: g.image, caption: g.description });
-    }
-    return { text: texts.join("\n"), images };
+    return formatRasterizeOutcome(parsed.groups);
   } catch {
     return { text: "Failed to parse rasterization result from the frontend." };
   }
+}
+
+function formatRasterizeOutcome(
+  groups: { image: string; description: string }[],
+): ToolOutcome {
+  if (groups.length === 0) {
+    return {
+      text:
+        "No shape groups found — there are no overlapping or touching shapes/arrows on the canvas.",
+    };
+  }
+  const images: ToolImage[] = [];
+  const texts: string[] = [];
+  for (const g of groups) {
+    texts.push(g.description);
+    if (g.image) images.push({ mediaType: "image/png", data: g.image, caption: g.description });
+  }
+  return { text: texts.join("\n"), images };
 }
 
 async function readPdfPages(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
@@ -85,8 +110,6 @@ async function readPdfPages(input: Record<string, unknown>, ctx: ToolContext): P
   const images: ToolImage[] = [];
   const textParts: string[] = [];
   if (wasClipped) {
-    // Tell the model exactly what was cut so it knows to call again for the rest
-    // — the silent clamp used to make it think the PDF ended at page clampedEnd.
     textParts.push(
       `Note: requested pages ${start_page}-${end_page} exceed the ${MAX_PAGES_PER_CALL}-page-per-call limit. ` +
       `Returning pages ${start_page}-${clampedEnd}. ` +
@@ -94,23 +117,14 @@ async function readPdfPages(input: Record<string, unknown>, ctx: ToolContext): P
     );
   }
   for (let page = start_page; page <= clampedEnd; page++) {
-    const callbackId = crypto.randomUUID();
-    ctx.emit({ type: "read_pdf_page", callbackId, filename, page });
-    const payload = await awaitCallback(callbackId, PDF_RENDER_TIMEOUT_MS);
-    if (!payload) {
-      textParts.push(`Page ${page}: Render timed out.`);
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(payload) as { image?: string; error?: string };
-      if (parsed.error) {
-        textParts.push(`Page ${page}: ${parsed.error}`);
-      } else if (parsed.image) {
-        textParts.push(`Page ${page} of "${filename}"`);
-        images.push({ mediaType: "image/png", data: parsed.image, caption: `Page ${page}` });
-      }
-    } catch {
-      textParts.push(`Page ${page}: Failed to parse render result.`);
+    const result = await renderPdfPage(filename, page, ctx);
+    if (result.error) {
+      textParts.push(`Page ${page}: ${result.error}`);
+    } else if (result.image) {
+      textParts.push(`Page ${page} of "${filename}"`);
+      images.push({ mediaType: "image/png", data: result.image, caption: `Page ${page}` });
+    } else {
+      textParts.push(`Page ${page}: Render returned no result.`);
     }
   }
   return {
@@ -119,8 +133,38 @@ async function readPdfPages(input: Record<string, unknown>, ctx: ToolContext): P
   };
 }
 
+async function renderPdfPage(
+  filename: string,
+  page: number,
+  ctx: ToolContext,
+): Promise<{ image?: string; error?: string }> {
+  if (ctx.readPdfPage) {
+    try {
+      return await ctx.readPdfPage(filename, page);
+    } catch (e) {
+      return { error: `Failed to render page: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+  const callbackId = crypto.randomUUID();
+  ctx.emit({ type: "read_pdf_page", callbackId, filename, page });
+  const payload = await awaitCallback(callbackId, PDF_RENDER_TIMEOUT_MS);
+  if (!payload) return { error: "Render timed out." };
+  try {
+    return JSON.parse(payload) as { image?: string; error?: string };
+  } catch {
+    return { error: "Failed to parse render result." };
+  }
+}
+
 async function readNote(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
   const { note_id } = input as { note_id: string };
+  if (ctx.readNote) {
+    try {
+      return { text: await ctx.readNote(note_id) };
+    } catch (e) {
+      return { text: `Error reading note: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
   const callbackId = crypto.randomUUID();
   ctx.emit({ type: "read_note", callbackId, noteId: note_id });
   const payload = await awaitCallback(callbackId, NOTE_READ_TIMEOUT_MS);
@@ -128,6 +172,13 @@ async function readNote(input: Record<string, unknown>, ctx: ToolContext): Promi
 }
 
 async function readCurrentNote(ctx: ToolContext): Promise<ToolOutcome> {
+  if (ctx.readCurrentNote) {
+    try {
+      return { text: await ctx.readCurrentNote() };
+    } catch (e) {
+      return { text: `Error reading current note: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
   const callbackId = crypto.randomUUID();
   ctx.emit({ type: "read_current_note", callbackId });
   const payload = await awaitCallback(callbackId, NOTE_READ_TIMEOUT_MS);
@@ -142,6 +193,13 @@ async function readChat(input: Record<string, unknown>, ctx: ToolContext): Promi
   };
   const reqOffset = Math.max(0, Math.floor(offset ?? 0));
   const reqCount = Math.max(1, Math.min(10, Math.floor(count ?? 10)));
+  if (ctx.readChat) {
+    try {
+      return { text: await ctx.readChat(chat_number, reqOffset, reqCount) };
+    } catch (e) {
+      return { text: `Error reading chat: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
   const callbackId = crypto.randomUUID();
   ctx.emit({
     type: "read_chat",

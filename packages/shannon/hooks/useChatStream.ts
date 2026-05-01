@@ -7,7 +7,9 @@ import type {
 import { CHART_TYPES } from "../lib/canvas-types";
 import type { Dispatch } from "../components/canvas/types";
 import { escapeCellHtml, placeChain } from "../lib/canvas-utils";
-import { openChatStream, readSseEvents, type SseEvent, type ChatRequestBody } from "../lib/chat-client";
+import type { SseEvent, ChatRequestBody } from "../lib/chat-client";
+import { streamChat } from "../lib/providers/chat-stream";
+import type { ToolCallbacks } from "../lib/chat/tools/types";
 import { compactChatHistory } from "../lib/chat/compact-client";
 
 type ChatHistoryMessage = ChatContextMessage;
@@ -38,10 +40,13 @@ export type ChatStreamDeps = {
   /** Compute placement for a tool-spawned element (honors args.x/args.y, else uses shell's auto-placement). */
   resolvePos: (chatElId: string, args: Record<string, unknown>, elW: number, elH: number) => { x: number; y: number };
   /**
-   * Fallback for advanced tool events the hook still delegates to the shell:
-   * rasterize_shapes, read_pdf_page, read_note, read_chat. Phase 4/5 may migrate these.
+   * Tool implementations that need access to canvas/note state — provided by
+   * the shell (NotesCanvas) when calling useChatStream. Replaces the legacy
+   * SSE-callback dance: instead of the chat route emitting an event and the
+   * shell POSTing back to /api/chat/tool-callback, the tool's body lives
+   * here and runs synchronously inside the same client-side process.
    */
-  handleLegacyEvent: (chatElId: string, ev: SseEvent) => void;
+  toolCallbacks: ToolCallbacks;
   /** After the stream finishes — lets the shell flush to localStorage. */
   onStreamComplete?: () => void;
 };
@@ -262,17 +267,9 @@ async function streamRequest(args: {
   });
 
   try {
-    const res = await openChatStream(body, ctrl.signal);
-    if (!res.ok || !res.body) {
-      deps.chatMutate(chatElId, (chat) => {
-        const msgs = [...chat.messages];
-        msgs[msgs.length - 1] = { role: "assistant", content: "Error: could not reach AI" };
-        return { ...chat, messages: msgs, isStreaming: false };
-      });
-      return;
-    }
-
-    // Clear placeholder "…"
+    // Clear placeholder "…" — streamChat is a generator that does the
+    // network request itself, so there's no separate "is the response ok?"
+    // step. Connection failures surface as {type: "error"} events.
     deps.chatMutate(chatElId, (chat) => {
       const msgs = [...chat.messages];
       msgs[msgs.length - 1] = { role: "assistant", content: "" };
@@ -397,7 +394,7 @@ async function streamRequest(args: {
     const entry = args.abortRef.current;
     if (entry) entry.timer = drainTimer;
 
-    for await (const ev of readSseEvents(res.body)) {
+    for await (const ev of streamChat({ ...body, callbacks: deps.toolCallbacks, signal: ctrl.signal })) {
       if (ev.type === "delta") {
         full += ev.text;
         const est = baseOutputTokens + Math.round(full.length / 4);
@@ -442,10 +439,12 @@ async function streamRequest(args: {
         }
       } else if (ev.type === "error") {
         full += `Error: ${ev.message || "Unknown error from AI"}`;
-      } else {
-        // Not migrated yet — let the shell handle it
-        deps.handleLegacyEvent(chatElId, ev);
       }
+      // Note: rasterize_shapes / read_pdf_page / read_note / read_current_note
+      // / read_chat events used to be emitted by the legacy /api/chat route
+      // and dispatched via handleLegacyEvent. The new streamChat path runs
+      // those tools directly via deps.toolCallbacks, so those events never
+      // arrive here.
     }
     if (full === "") {
       full = "Sorry, I wasn't able to generate a response. Please try again.";

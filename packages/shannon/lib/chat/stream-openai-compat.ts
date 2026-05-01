@@ -60,8 +60,13 @@ export async function streamOpenAICompatChat(params: {
   messages: Anthropic.MessageParam[];
   ephemeral: boolean;
   ctx: ToolContext;
+  /** Caller-provided fetch. Lets the client-side SPA route through
+   *  platformFetch (Tauri http plugin or /api/proxy). Defaults to global
+   *  fetch for the legacy server-side route. */
+  fetchImpl?: typeof fetch;
 }): Promise<void> {
   const { apiKey, baseUrl, model, ephemeral, ctx } = params;
+  const fetchImpl = params.fetchImpl ?? fetch;
   const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const contextWindow = contextWindowFor(model);
 
@@ -80,7 +85,7 @@ export async function streamOpenAICompatChat(params: {
   let lastTurnInputTokens = 0;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
