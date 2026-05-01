@@ -11,6 +11,7 @@ import {
   type ProviderKind,
   type RoleName,
 } from "../../lib/providers/registry";
+import { listProviderModelsClient } from "../../lib/providers/list-models-client";
 
 // Module-level model-list cache: avoids re-fetching when the same provider is
 // referenced by multiple role rows or revisited within a session. 5-minute
@@ -515,19 +516,11 @@ function RoleRow({
     }
     setModelList({ kind: "loading" });
     let cancelled = false;
-    fetch(`/api/config/models/${encodeURIComponent(selectedProviderId)}`)
-      .then((r) => r.json())
-      .then((j) => {
+    listProviderModelsClient(selectedProviderId)
+      .then((models) => {
         if (cancelled) return;
-        if (j.status === "ok" && Array.isArray(j.models)) {
-          modelCache.set(selectedProviderId, { models: j.models, fetchedAt: Date.now() });
-          setModelList({ kind: "ok", models: j.models });
-        } else {
-          setModelList({
-            kind: "error",
-            message: `Unable to fetch model list: ${j.message ?? "unknown error"}`,
-          });
-        }
+        modelCache.set(selectedProviderId, { models, fetchedAt: Date.now() });
+        setModelList({ kind: "ok", models });
       })
       .catch((e: unknown) => {
         if (cancelled) return;

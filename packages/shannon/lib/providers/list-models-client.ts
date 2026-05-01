@@ -1,17 +1,21 @@
-// Live model-list fetcher per provider kind. The /api/config/models/[id]
-// route uses this to populate the role-row autocomplete; failures surface to
-// the user as "Unable to fetch model list: <reason>". No static fallbacks —
-// if the provider doesn't expose a list endpoint, the upstream HTTP error is
-// what the user sees.
+// Client-side model-list fetcher per provider kind. Replaces the
+// /api/config/models/[id] route — the /model page calls this directly
+// instead of going through HTTP. Uses platformFetch so calls work in
+// both Tauri (http plugin) and web (rewrite to /api/proxy) modes.
 
-import { readConfig } from "./config";
+import { platformFetch } from "@/lib/platform/http";
+import { readConfig } from "@/lib/platform/config";
 import { BRAVE_VERTICALS } from "./search-brave";
+import type { ProviderKind, RoleName } from "./registry";
 
-// Perplexity's plain Sonar API has no /models endpoint. Their /v1/models is a
-// separate multi-vendor gateway that returns vendor-prefixed IDs (e.g.
-// "perplexity/sonar") which the Sonar /chat/completions path rejects. So we
-// short-circuit list-fetch for any provider pointing at api.perplexity.ai
-// and surface the static Sonar model set instead.
+type ShannonProvider = { kind: ProviderKind; apiKey: string; baseUrl?: string };
+type ShannonRole = { provider: string; model: string };
+type ShannonConfigShape = {
+  providers: Record<string, ShannonProvider>;
+  roles: Partial<Record<RoleName, ShannonRole>>;
+};
+
+// Perplexity's plain Sonar API has no /models endpoint.
 const PERPLEXITY_MODELS = ["sonar", "sonar-pro", "sonar-reasoning"];
 
 function isPerplexityHost(baseUrl: string | undefined): boolean {
@@ -23,8 +27,13 @@ function isPerplexityHost(baseUrl: string | undefined): boolean {
   }
 }
 
-export async function listProviderModels(providerId: string): Promise<string[]> {
-  const cfg = await readConfig();
+export async function listProviderModelsClient(
+  providerId: string,
+): Promise<string[]> {
+  const cfg = await readConfig<ShannonConfigShape>();
+  if (!cfg) {
+    throw new Error("No config found. Save your provider settings first.");
+  }
   const provider = cfg.providers[providerId];
   if (!provider) throw new Error(`Provider "${providerId}" is not configured.`);
   if (!provider.apiKey) {
@@ -43,53 +52,51 @@ export async function listProviderModels(providerId: string): Promise<string[]> 
         provider.baseUrl ?? "https://api.openai.com/v1",
       );
     case "search-tavily":
-      // The "model" field for Tavily is really `search_depth`.
       throw new Error(
         "Tavily has no model list endpoint — set search depth to 'basic' or 'advanced'.",
       );
     case "search-brave":
-      // Brave has no discovery endpoint, but our adapter dispatches across
-      // verticals (BRAVE_VERTICALS) — return that list so users get a real
-      // dropdown of what we support, not a one-line guidance string.
       return [...BRAVE_VERTICALS];
   }
 }
 
 async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
-  const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+  const res = await platformFetch("https://api.anthropic.com/v1/models?limit=100", {
     headers: {
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
     },
   });
   if (!res.ok) {
-    throw new Error(`Anthropic /v1/models returned ${res.status}: ${await res.text().catch(() => "")}`.trim());
+    throw new Error(
+      `Anthropic /v1/models returned ${res.status}: ${await res.text().catch(() => "")}`.trim(),
+    );
   }
   const json = await res.json();
   const data: { id?: string }[] = Array.isArray(json?.data) ? json.data : [];
   return data.map((m) => m.id).filter((id): id is string => typeof id === "string");
 }
 
-async function fetchOpenAICompatModels(apiKey: string, baseUrl: string): Promise<string[]> {
+async function fetchOpenAICompatModels(
+  apiKey: string,
+  baseUrl: string,
+): Promise<string[]> {
   const trimmed = baseUrl.replace(/\/+$/, "");
   const headers = { Authorization: `Bearer ${apiKey}` };
 
-  // Some providers expose only /v1/models (e.g. Perplexity), but legacy user
-  // configs save baseUrl without /v1 because their /chat/completions also
-  // works without it. Try the literal baseUrl first, then transparently fall
-  // back to /v1 — preserves existing configs without forcing a manual edit.
   let url = `${trimmed}/models`;
-  let res = await fetch(url, { headers });
+  let res = await platformFetch(url, { headers });
   if (res.status === 404 && !/\/v\d+(\/|$)/.test(trimmed)) {
     url = `${trimmed}/v1/models`;
-    res = await fetch(url, { headers });
+    res = await platformFetch(url, { headers });
   }
 
   if (!res.ok) {
-    throw new Error(`${url} returned ${res.status}: ${await res.text().catch(() => "")}`.trim());
+    throw new Error(
+      `${url} returned ${res.status}: ${await res.text().catch(() => "")}`.trim(),
+    );
   }
   const json = await res.json();
-  // OpenAI shape: { data: [{ id, ... }] }. Ollama /v1/models matches.
   const data: { id?: string }[] = Array.isArray(json?.data) ? json.data : [];
   return data.map((m) => m.id).filter((id): id is string => typeof id === "string");
 }
