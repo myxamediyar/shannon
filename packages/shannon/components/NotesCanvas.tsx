@@ -1254,7 +1254,13 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
 
   // ── Sync from parent prop ────────────────────────────────────────────────
 
-  const prevNoteIdRef = useRef(noteProp?.id ?? null);
+  // Init to null (not noteProp?.id) so the effect below always runs once on
+  // mount, even when the parent already has the note cached and hands it in
+  // on the very first render. Otherwise the spatial r-tree never gets built
+  // for the initial note, and the first ResizeObserver fire blanks
+  // visibleElementsRef against the empty tree — elements stay invisible
+  // until some other path rebuilds spatial (interaction, image hydration).
+  const prevNoteIdRef = useRef<string | null>(null);
   useEffect(() => {
     const newId = noteProp?.id ?? null;
     if (newId === prevNoteIdRef.current) return;
