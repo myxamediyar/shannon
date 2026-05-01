@@ -15,15 +15,17 @@ try {
   process.exit(1);
 }
 
-setTimeout(() => {
-  if (process.platform === 'darwin') {
-    spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
-  } else if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
-  } else {
-    spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
-  }
-}, 2000);
+if (process.env.SHANNON_NO_OPEN !== '1') {
+  setTimeout(() => {
+    if (process.platform === 'darwin') {
+      spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+    } else if (process.platform === 'win32') {
+      spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
+    } else {
+      spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+    }
+  }, 2000);
+}
 
 const child = spawn(process.execPath, [nextBin, 'start', '-H', host, '-p', String(port)], {
   cwd: projectDir,

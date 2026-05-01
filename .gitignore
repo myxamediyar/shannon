@@ -1,45 +1,39 @@
-# Dependencies
+# Hoisted workspace deps
 node_modules/
 
-# Next.js
-.next/
-out/
+# Build outputs
+**/.next
+**/dist
+**/build
+**/out
+**/target
+**/tsconfig.tsbuildinfo
+**/*.tgz
 
-# Build
-dist/
-build/
-
-# npm pack output
-*.tgz
-
-# Env files
+# Env
 .env
 .env.local
-.env*.local
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-.venv
+.env.*.local
 
 # Logs
 *.log
 npm-debug.log*
 
-# TypeScript
-*.tsbuildinfo
+# OS
+.DS_Store
+Thumbs.db
 
-# Dev context
-.dev-context
+# Editors
+.vscode/
+.idea/
+.venv/
 
-# python
-__pycache__
+# Local scratch / dev (root-only — packages keep their own docs/)
+/docs/
+/images_originals/
+/tasks/
+/development_files/
+/.dev-context
 
-images_originals
-tasks/
-development_files/
-docs/
+# Python caches
+__pycache__/

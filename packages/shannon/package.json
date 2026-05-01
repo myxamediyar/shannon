@@ -1,0 +1,77 @@
+{
+  "name": "tryshannon",
+  "version": "0.1.4",
+  "description": "A local-first, BYOK AI whiteboard. Infinite canvas for notes, chat, drawings, math, graphs, charts, tables, PDFs, and embeds.",
+  "license": "Apache-2.0",
+  "author": "myxamediyar",
+  "homepage": "https://github.com/myxamediyar/shannon#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/myxamediyar/shannon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/myxamediyar/shannon/issues"
+  },
+  "keywords": [
+    "shannon",
+    "whiteboard",
+    "canvas",
+    "notes",
+    "ai",
+    "byok",
+    "llm",
+    "local-first",
+    "nextjs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "shannon": "bin/shannon.js"
+  },
+  "files": [
+    ".next",
+    "public",
+    "bin",
+    "next.config.js",
+    "NOTICE"
+  ],
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "build": "next build --webpack",
+    "start": "next start -H 127.0.0.1 -p 1948",
+    "lint": "next lint",
+    "prepack": "rm -rf .next && npm run build && rm -rf .next/cache"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@openai/agents": "^0.7.1",
+    "@tiptap/extension-image": "^3.22.3",
+    "@tiptap/pm": "^3.22.3",
+    "@tiptap/react": "^3.22.3",
+    "@tiptap/starter-kit": "^3.22.3",
+    "@types/katex": "^0.16.8",
+    "chart.js": "^4.4.6",
+    "katex": "^0.16.42",
+    "mathjs": "^15.2.0",
+    "next": "^16.1.6",
+    "pdfjs-dist": "^5.6.205",
+    "rbush": "^4.0.1",
+    "react": "^18",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "remark-mark-highlight": "^0.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/rbush": "^4.0.0",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.0.1",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}
