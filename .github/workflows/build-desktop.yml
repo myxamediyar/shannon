@@ -56,16 +56,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # Tauri 2 signs the actual installers directly (.exe.sig, .AppImage.sig,
+      # .msi.sig, .deb.sig). The older Tauri 1 ".nsis.zip.sig" / ".AppImage.tar.gz.sig"
+      # naming is gone — don't be misled by stale community docs.
       - uses: actions/upload-artifact@v4
         with:
           name: shannon-${{ matrix.label }}
           if-no-files-found: error
           path: |
             packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
             packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
-            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.nsis.zip
-            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.nsis.zip.sig
+            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
             packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb.sig
             packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz
-            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz.sig
+            packages/shannon-desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
