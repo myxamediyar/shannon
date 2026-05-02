@@ -73,10 +73,21 @@ sh("npm install --silent");
 // ── 4. Cargo.lock refresh ───────────────────────────────────────────────────
 // The version in Cargo.toml is also recorded in Cargo.lock. Without this
 // the CI build would patch it on first run and produce a dirty tree.
+//
+// `cargo` may not be on node's PATH if it's installed under ~/.cargo/bin
+// and only exposed via a shell rc. Probe both before bailing.
 console.log("refreshing Cargo.lock…");
-sh("cargo update -p shannon_desktop --workspace --offline 2>/dev/null || cargo update -p shannon_desktop", {
-  cwd: resolve(REPO, "packages/shannon-desktop/src-tauri"),
-});
+const cargoBin = (() => {
+  for (const candidate of ["cargo", `${process.env.HOME}/.cargo/bin/cargo`]) {
+    try {
+      execSync(`${candidate} --version`, { stdio: "ignore" });
+      return candidate;
+    } catch {}
+  }
+  console.error("cargo not found on PATH or in ~/.cargo/bin — install Rust first");
+  process.exit(1);
+})();
+sh(`${cargoBin} update -p shannon_desktop --offline --manifest-path packages/shannon-desktop/src-tauri/Cargo.toml`);
 
 // ── 5. Commit + tag ─────────────────────────────────────────────────────────
 if (skipCommit) {
