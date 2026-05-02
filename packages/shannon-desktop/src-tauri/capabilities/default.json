@@ -41,6 +41,8 @@
     "fs:allow-remove",
     "fs:allow-rename",
     "dialog:default",
+    "updater:default",
+    "process:default",
     {
       "identifier": "fs:scope",
       "allow": [

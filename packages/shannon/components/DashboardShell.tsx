@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import Sidebar from "./Sidebar";
 import MenuEventBridge from "./MenuEventBridge";
+import UpdaterBridge from "./UpdaterBridge";
 import { useSettings } from "../lib/use-settings";
 import {
   subscribeSidebarCollapsed,
@@ -34,6 +35,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   return (
     <>
       <MenuEventBridge />
+      <UpdaterBridge />
       <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
       <div className="flex flex-col h-screen overflow-hidden">
         <main className="flex-1 overflow-y-auto bg-[var(--th-bg)] min-h-0">
