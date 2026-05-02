@@ -9,7 +9,23 @@ machine; the only network calls are to the providers you configure.
 
 [![Shannon demo](https://img.youtube.com/vi/HoNoBNYV194/maxresdefault.jpg "▶ Watch the demo on YouTube")](https://youtu.be/HoNoBNYV194)
 
-## Quick start
+## Download
+
+Native desktop builds (no Node required):
+
+| Platform | File |
+| -------- | ---- |
+| macOS (Apple Silicon) | [`Shannon_*_aarch64.dmg`](https://github.com/myxamediyar/shannon/releases/latest) |
+| Windows | [`Shannon_*_x64-setup.exe`](https://github.com/myxamediyar/shannon/releases/latest) / [`Shannon_*_x64_en-US.msi`](https://github.com/myxamediyar/shannon/releases/latest) |
+| Linux (deb) | [`Shannon_*_amd64.deb`](https://github.com/myxamediyar/shannon/releases/latest) |
+| Linux (AppImage) | [`Shannon_*_amd64.AppImage`](https://github.com/myxamediyar/shannon/releases/latest) |
+
+> The macOS build is signed and notarized — opens with no Gatekeeper
+> prompt. Windows users will see a SmartScreen "Unknown publisher"
+> warning on first launch (click **More info → Run anyway**); the
+> warning fades as more downloads accrue.
+
+## Run as a local web app (npm)
 
 Install globally and run from anywhere:
 
