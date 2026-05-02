@@ -2,8 +2,11 @@
 
 // Tauri auto-updater. On app boot, polls the manifest URL configured in
 // tauri.conf.json's plugins.updater.endpoints. If a newer version is
-// available, the plugin's built-in dialog (`dialog: true`) prompts the
-// user to download + install. After the install we relaunch the app.
+// available, prompts the user via a native macOS confirm dialog (the
+// `dialog: true` config option is a Tauri-1 holdover that doesn't apply
+// when driving the updater from the JS plugin API — the UI is ours).
+// On confirm, downloads, verifies the Ed25519 signature, swaps the
+// binary in place, and relaunches.
 //
 // No-op outside Tauri. Mounted once at the dashboard root next to
 // MenuEventBridge.
@@ -23,9 +26,13 @@ export default function UpdaterBridge() {
         const update = await check();
         if (cancelled || !update) return;
 
-        // dialog: true in tauri.conf shows the OS-native prompt. If the
-        // user declines, downloadAndInstall throws or is a no-op
-        // depending on the version — guard with try/catch.
+        const { ask } = await import("@tauri-apps/plugin-dialog");
+        const wantsInstall = await ask(
+          `Shannon ${update.version} is available — you have ${update.currentVersion}.\n\nInstall and restart now?`,
+          { title: "Update available", kind: "info", okLabel: "Install", cancelLabel: "Later" },
+        );
+        if (cancelled || !wantsInstall) return;
+
         await update.downloadAndInstall();
 
         const { relaunch } = await import("@tauri-apps/plugin-process");
