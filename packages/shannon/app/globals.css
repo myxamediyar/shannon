@@ -210,6 +210,17 @@ body {
   display: none;
 }
 
+/* Tauri's macOS WKWebView defaults -webkit-user-select to none, which the
+   inline `userSelect: text` on chat message wrappers can't override (it only
+   sets the unprefixed property). Force the prefixed form on the chat subtree —
+   but only when the chat opted in (cursor entered without a drag in progress).
+   Always-on selection lets a native text-selection drag started on a neighbor
+   element extend through the DOM into the chat. */
+[data-chat-container].chat-selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ── Chat markdown styles ─────────────────────────────────────────────────── */
 
 .chat-markdown {

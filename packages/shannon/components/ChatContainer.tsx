@@ -187,6 +187,11 @@ function ChatContainer({
   // auto/scrollHeight reflow when the user is actively typing.
   const heightAdjustedByInput = useRef(false);
   const [isHovered, setIsHovered] = useState(false);
+  // Gate text selection on the chat subtree. Only true when the cursor entered
+  // without a button held — prevents a native selection drag started on a
+  // sibling element (e.g., a neighboring text element with user-select: text)
+  // from extending through the DOM and highlighting chat content.
+  const [selectable, setSelectable] = useState(false);
 
   // Lazy rendering: only render the last N messages, load more when user scrolls up
   const INITIAL_RENDER_COUNT = 6;
@@ -204,8 +209,11 @@ function ChatContainer({
     lastH?: number;
   } | null>(null);
 
-  // Auto-scroll: pin to bottom unless user has scrolled away
+  // Auto-scroll: pin to bottom only on new-message and on initial mount.
+  // While streaming token deltas we deliberately do NOT pin — content flows
+  // down past the viewport and a "more below" indicator appears instead.
   const userScrolledAwayRef = useRef(false);
+  const [hasContentBelow, setHasContentBelow] = useState(false);
 
   // Track whether user has manually scrolled away from the bottom
   useEffect(() => {
@@ -219,14 +227,27 @@ function ChatContainer({
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // New message: reset lazy render count and re-pin to bottom
+  // New message: reset lazy render count and pin once to show the new message.
+  // The pin runs inside rAF so it lands after the new content has been measured.
   useLayoutEffect(() => {
     if (chatEl.messages.length > prevMsgCountRef.current) {
       setRenderCount(INITIAL_RENDER_COUNT);
       userScrolledAwayRef.current = false;
+      requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (!el || userScrolledAwayRef.current) return;
+        el.scrollTop = el.scrollHeight;
+      });
     }
     prevMsgCountRef.current = chatEl.messages.length;
   }, [chatEl.messages.length]);
+
+  // Initial mount: scroll to bottom so the latest message is visible when a
+  // chat with existing history first renders.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
 
   // // Load more messages when sentinel becomes visible (user scrolled up)
   useEffect(() => {
@@ -340,13 +361,18 @@ function ChatContainer({
     }
   });
 
-  // Pin scroll to the bottom on every render unless the user has scrolled up.
-  // Uses live DOM measurements so resized chats (el.h < 20 lines) work too.
+  // While streaming, surface a "more below" indicator whenever the assistant's
+  // tokens have flowed past the bottom of the viewport. Recomputed every render
+  // so the indicator reflects content growth, not just scroll events.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || userScrolledAwayRef.current) return;
-    if (el.scrollHeight <= el.clientHeight) return;
-    el.scrollTop = el.scrollHeight;
+    if (!el) {
+      if (hasContentBelow) setHasContentBelow(false);
+      return;
+    }
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const showIndicator = !!chatEl.isStreaming && distFromBottom > 30;
+    if (showIndicator !== hasContentBelow) setHasContentBelow(showIndicator);
   });
 
   // ── Resize handlers ─────────────────────────────────────────────────────
@@ -419,6 +445,19 @@ function ChatContainer({
     onPointerUp: handleResizePointerUp,
   };
 
+  // Reset selectable when a drag finishes outside this chat. Without this,
+  // the chat could stay selectable across an unrelated drag (since mouseleave
+  // during a drag intentionally doesn't clear it).
+  useEffect(() => {
+    if (!selectable) return;
+    const onUp = (e: MouseEvent) => {
+      const node = containerRef.current;
+      if (node && !node.contains(e.target as Node)) setSelectable(false);
+    };
+    document.addEventListener("mouseup", onUp);
+    return () => document.removeEventListener("mouseup", onUp);
+  }, [selectable]);
+
   return (
     <div
       ref={containerRef}
@@ -426,8 +465,20 @@ function ChatContainer({
       data-chat-container
       data-chat-id={chatEl.chatId}
       data-el-id={chatEl.id}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => { if (!resizeDragRef.current) setIsHovered(false); }}
+      className={selectable ? "chat-selectable" : undefined}
+      onMouseEnter={(e) => {
+        setIsHovered(true);
+        // Only enable text selection if the cursor entered without a button
+        // pressed — otherwise we'd opt in mid-drag and let a foreign selection
+        // extend into chat content.
+        if (e.buttons === 0) setSelectable(true);
+      }}
+      onMouseLeave={(e) => {
+        if (!resizeDragRef.current) setIsHovered(false);
+        // Keep selectable=true while a drag is in progress so the user's own
+        // in-chat selection can extend out and back without losing the gate.
+        if (e.buttons === 0) setSelectable(false);
+      }}
       onClick={(e) => {
         // Clicks that land on the textarea manage their own caret/selection —
         // don't clobber with a focus-to-end redirect. (window.getSelection()
@@ -836,6 +887,46 @@ function ChatContainer({
           )}
         </div>
       </div>
+
+      {/* "More content below" indicator — visible while streaming when the
+          assistant's tokens have flowed past the bottom of the viewport.
+          Clicking jumps to the live edge. */}
+      {hasContentBelow && (
+        <div
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const el = scrollRef.current;
+            if (!el) return;
+            userScrolledAwayRef.current = false;
+            el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+          }}
+          title="Jump to live"
+          style={{
+            position: "absolute",
+            bottom: 8,
+            left: CHAT_INDICATOR_MARGIN + (contentW - FONT_SIZE * 1.6) / 2,
+            width: FONT_SIZE * 1.6,
+            height: FONT_SIZE * 1.6,
+            borderRadius: "50%",
+            background: "var(--th-surface, rgba(30,30,30,0.9))",
+            border: "1px solid var(--th-border-30, rgba(255,255,255,0.18))",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--th-text)",
+            cursor: "pointer",
+            pointerEvents: "auto",
+            animation: "pulse-opacity 1.5s ease-in-out infinite",
+            zIndex: 5,
+          }}
+        >
+          <svg width={FONT_SIZE * 0.9} height={FONT_SIZE * 0.9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </div>
+      )}
 
       {/* ── Resize handles ──────────────────────────────────────────────── */}
 

@@ -82,8 +82,8 @@ import {
   TOOLS,
   BG_DOT_RADIUS,
   BG_DOT_SPACING,
-  STORAGE_KEY,
 } from "../lib/canvas-types";
+import { getNotesSnapshot } from "../lib/platform/notes-storage";
 
 import { useSettings, uiToRealOpacity } from "../lib/use-settings";
 import { useResolvedBgImage } from "../lib/custom-backgrounds";
@@ -927,6 +927,11 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
 
   /** Canvas bounds (in canvas space) of the latest marquee selection rectangle. Used for character-accurate erase on Backspace/Delete. */
   const selectionEraseBoundsRef = useRef<{ leftCanvas: number; rightCanvas: number; topCanvas: number; bottomCanvas: number } | null>(null);
+  /** IDs the bounds above was produced for. Bounds is only meaningful while
+   *  the current selection still matches these — if the user clicks to select
+   *  a different element (mover) or runs Cmd+A, the marquee box no longer
+   *  describes their intent and Backspace should delete whole elements. */
+  const selectionEraseBoundsIdsRef = useRef<Set<string> | null>(null);
 
   // ── Persistence (delegated to parent via onNoteChange) ──────────────────
 
@@ -1218,7 +1223,14 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     const aid = activeId;
     if (!aid || selectedIds.length === 0) return;
     const rm = new Set(selectedIds);
-    const bounds = selectionEraseBoundsRef.current;
+    // Bounds is only meaningful when the current selection still matches the
+    // IDs the marquee produced. Otherwise the user has clicked/Cmd-A'd to a
+    // different selection and the box no longer describes their intent.
+    const boundsIds = selectionEraseBoundsIdsRef.current;
+    const boundsValid = !!boundsIds
+      && boundsIds.size === selectedIds.length
+      && selectedIds.every((id) => boundsIds.has(id));
+    const bounds = boundsValid ? selectionEraseBoundsRef.current : null;
     const isDrawTool = activeTool === "draw";
     execPlace({
       kind: "transform",
@@ -1236,10 +1248,11 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
             continue;
           }
           if (el.type === "text") {
-            const frags = bounds
-              ? eraseWithinBoxFully(el, bounds.leftCanvas, bounds.rightCanvas, bounds.topCanvas, bounds.bottomCanvas)
-              : eraseWithinBoxFully(el, -Infinity, Infinity, -Infinity, Infinity);
-            nextElements.push(...frags);
+            if (bounds) {
+              const frags = eraseWithinBoxFully(el, bounds.leftCanvas, bounds.rightCanvas, bounds.topCanvas, bounds.bottomCanvas);
+              nextElements.push(...frags);
+            }
+            // No bounds (selection wasn't from a fresh marquee) → drop entirely.
             continue;
           }
           // No highlight: erase whole element.
@@ -1249,6 +1262,7 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     });
     setSelectedIds([]);
     selectionEraseBoundsRef.current = null;
+    selectionEraseBoundsIdsRef.current = null;
   }
   const removeAllSelectedRef = useLatest(removeAllSelected);
 
@@ -1339,7 +1353,10 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (selectedIds.length === 0) selectionEraseBoundsRef.current = null;
+    if (selectedIds.length === 0) {
+      selectionEraseBoundsRef.current = null;
+      selectionEraseBoundsIdsRef.current = null;
+    }
   }, [selectedIds.length]);
 
   useEffect(() => {
@@ -2096,6 +2113,7 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
     onSelect: (ids, bounds) => {
       setSelectedIds(ids);
       selectionEraseBoundsRef.current = bounds;
+      selectionEraseBoundsIdsRef.current = new Set(ids);
     },
     onErase: (rm, eraseLeftCanvas, eraseRightCanvas) => {
       const removedIds = new Set<string>();
@@ -3667,12 +3685,9 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                           return serializeElements(visibleEls, chatEl);
                         },
                         buildSidebarNotes: () => {
-                          try {
-                            const allNotes: NoteItem[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-                            return allNotes
-                              .filter(n => n.id !== noteProp?.id)
-                              .map(n => ({ id: n.id, title: n.title || "Untitled" }));
-                          } catch { return []; }
+                          return getNotesSnapshot()
+                            .filter(n => n.id !== noteProp?.id)
+                            .map(n => ({ id: n.id, title: n.title || "Untitled" }));
                         },
                         getCurrentNoteTitle: () => noteProp?.title || null,
                         chatHistoriesRef,
@@ -3727,8 +3742,7 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                           },
                           readNote: async (noteId) => {
                             try {
-                              const allNotes: NoteItem[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-                              const target = allNotes.find(n => n.id === noteId);
+                              const target = getNotesSnapshot().find(n => n.id === noteId);
                               if (!target) return `Note with id="${noteId}" not found.`;
                               const { text } = serializeElements(target.elements ?? []);
                               return `Title: ${target.title || "Untitled"}\n${text}`;
@@ -3869,6 +3883,14 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
                           if (textMarqueeSelectedIdsRef.current.size > 0) setTextMarqueeSelectedIds(new Set());
                         },
                         onKeyDown: (e, textEl, adapter) => handleCanvasTextKeyDown(e, textEl, adapter),
+                        onResize: (id, w) => {
+                          execPlace({
+                            kind: "mutate",
+                            id,
+                            changes: { w },
+                            resolve: dragResolvePush(),
+                          });
+                        },
                         editorMapRef,
                       }}
                     />
@@ -4063,8 +4085,7 @@ export default function NotesCanvas({ note: noteProp, onNoteChange, onCreateNote
 
           {/* Note picker popup */}
           {notePickerPos && (() => {
-            let allNotes: NoteItem[] = [];
-            try { allNotes = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { /* ignore */ }
+            const allNotes = getNotesSnapshot();
             // Exclude the current note from the list
             const currentId = stateRef.current.activeId;
             const filtered = allNotes

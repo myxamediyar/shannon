@@ -775,6 +775,19 @@ export function canvasTextBoxWidth(el: TextEl): number {
   return Math.max(8, el.measuredW ?? 8);
 }
 
+/** Sample string defining the default per-line character limit (47 chars).
+ *  Mixes wide and narrow glyphs so the resulting pixel width is representative
+ *  of typical prose, not narrow-only ("nnnn…") or wide-only ("WWWW…"). */
+const TEXT_DEFAULT_WRAP_SAMPLE = "Weweeweweweweweeweweweweweweweweweweweweweewewe";
+
+/** Wrap width (max-width) for a text element in canvas-space px. Default is
+ *  the rendered width of the 47-char sample at this element's scale, so the
+ *  character count stays constant regardless of font size. */
+export function textElWrapWidth(el: TextEl): number {
+  if (el.w != null && el.w > 0) return el.w;
+  return canvasTextWidth(TEXT_DEFAULT_WRAP_SAMPLE, textScale(el));
+}
+
 /** Width for the editing textarea: based on raw text width (not markdown-rendered).
  *  Raw text includes syntax chars (#, **, etc.) so it's wider than rendered output. */
 export function canvasTextEditWidth(el: TextEl): number {

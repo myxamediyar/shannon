@@ -177,7 +177,7 @@ export type ChatEl = { id: string; type: "chat"; x: number; y: number; w?: numbe
    *  content so messages read more clearly against busy canvas backgrounds. */
   dimmed?: boolean;
 };
-export type TextEl   = { id: string; type: "text";   x: number; y: number; text: string; html?: string; fontScale?: number; locked?: boolean; cmdLen?: number; measuredW?: number; measuredH?: number };
+export type TextEl   = { id: string; type: "text";   x: number; y: number; text: string; html?: string; fontScale?: number; locked?: boolean; cmdLen?: number; measuredW?: number; measuredH?: number; /** Manual wrap width in canvas-space px (right-edge resize). If unset, defaults to chat content width. */ w?: number };
 
 /** A text fragment is "blank" if its plain text is empty or whitespace-only.
  *  Use this everywhere a fragment should be treated as a placeholder — drop on

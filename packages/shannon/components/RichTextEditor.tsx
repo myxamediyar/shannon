@@ -326,6 +326,9 @@ export interface RichTextEditorProps {
   locked?: boolean;
   isMoverTool?: boolean;
   flashRed?: boolean;
+  /** Soft-wrap max-width in canvas-space px. Word-wrap kicks in once content
+   *  reaches this width. Used to give text elements a chat-like wrap behavior. */
+  wrapWidth?: number;
   onChange: (html: string, plainText: string) => void;
   onBlur: (html: string, plainText: string) => void;
   onFocus: () => void;
@@ -341,6 +344,7 @@ const RichTextEditor = memo(function RichTextEditor({
   locked,
   isMoverTool,
   flashRed,
+  wrapWidth,
   onChange,
   onBlur,
   onFocus,
@@ -443,6 +447,7 @@ const RichTextEditor = memo(function RichTextEditor({
           `outline: none`,
           `white-space: pre-wrap`,
           `word-break: break-word`,
+          wrapWidth && wrapWidth > 0 ? `max-width: ${wrapWidth}px` : "",
           isMoverTool ? `cursor: grab` : `cursor: text`,
           // Block selection in mover tool so drags move the element instead.
           // When the note is locked the element can't be dragged, so prefer
@@ -479,6 +484,15 @@ const RichTextEditor = memo(function RichTextEditor({
     dom.style.userSelect = sel;
     dom.style.webkitUserSelect = sel;
   }, [editor, isMoverTool, locked]);
+
+  // Same reason as the cursor/select effect above: max-width must be written
+  // through to the live DOM when wrapWidth changes (e.g., user drags the
+  // right-edge resize handle on a text element).
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom as HTMLElement;
+    dom.style.maxWidth = wrapWidth && wrapWidth > 0 ? `${wrapWidth}px` : "";
+  }, [editor, wrapWidth]);
 
   useEffect(() => {
     if (!editor) return;
